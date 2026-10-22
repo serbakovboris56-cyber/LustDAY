@@ -290,7 +290,7 @@
         <dl class="facts facts--tight">
           <dt>Ремесло</dt><dd>${fmt(L_.craft.income)}</dd>
           <dt>Доход монет</dt><dd>${fmt(c.income)}</dd>
-          <dt>Содержание армии</dt><dd>−${fmt(c.upkeep)}</dd>
+          <dt>Содержание армии</dt><dd>${c.upkeep ? "−" + fmt(c.upkeep) : "0"}</dd>
           <dt>Итог монет</dt><dd class="${c.net < 0 ? "balance--deficit" : ""}">${signed(c.net)}</dd>
         </dl>
       </section>
