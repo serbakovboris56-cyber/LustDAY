@@ -33,8 +33,9 @@ python3 -m http.server 8000
 
 ## Горы на карте
 
-Горные хребты (`ranges` в `assets/map.json`) и значки вершин строит `tools/mountain_ranges.py` из SVG-экспорта карты Figma (слои «Биомы» и «Карта высот»):
+Горные хребты на карте строит `tools/mountain_ranges.py` из SVG-экспорта карты Figma (слои «Биомы» и «Карта высот»): вершины стоят вплотную друг к другу только внутри хребтов, к краю мельчают и редеют.
 
 ```
+pip install numpy scipy pillow
 python3 tools/mountain_ranges.py экспорт.svg assets/map.json
 ```

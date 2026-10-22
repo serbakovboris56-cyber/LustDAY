@@ -21,9 +21,7 @@
       steppe: "#A0873F",
       desert: "#C39E59",
     },
-    // Горные хребты — сплошная каменистая зона с тёмной кромкой, значки вершин только внутри неё.
-    range: { fill: "#5B4D3D", alpha: 0.9, edge: "#17120C", rim: "#9C8A6E" },
-    mountain: { light: "#B9AE97", shade: "#3E342A", line: "#120E09", snow: "#ECEFF0" },
+    mountain: { light: "#A39A86", shade: "#3B3328", line: "#14110C", snow: "#E4E6E2" },
     hill: "#1A1712",
   };
 
@@ -61,9 +59,8 @@
     });
     const biomes = data.biomes.map((bm) => ({ key: bm.key, name: bm.name, rings: bm.rings.map((r) => ({ b: bboxOf(r), r })) }));
     const rivers = data.rivers.map(([w, c]) => ({ w, b: bboxOf(c), p: linePath(c) }));
-    const ranges = (data.ranges || []).map((r) => ({ b: bboxOf(r), r }));
     const mountains = data.mountains.map(([x, y, s, k]) => ({ x, y, s, k, b: [x - s, y - s, x + s, y + s] }));
-    return { landRings, lakes, lakeLines, biomes, ranges, rivers, mountains };
+    return { landRings, lakes, lakeLines, biomes, rivers, mountains };
   }
 
   function pathFor(items, view) {
@@ -137,14 +134,6 @@
       for (const bm of D.biomes) {
         const p = pathFor(bm.rings, view);
         if (p) { ctx.fillStyle = STYLE.biomes[bm.key] || STYLE.land; ctx.fill(p, "evenodd"); }
-      }
-      // горные хребты: заливка и кромка, чтобы было видно, где горы кончаются
-      const ranges = pathFor(D.ranges, view);
-      if (ranges) {
-        ctx.globalAlpha = STYLE.range.alpha; ctx.fillStyle = STYLE.range.fill; ctx.fill(ranges, "nonzero");
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = STYLE.range.rim; ctx.lineWidth = 3.2 / k; ctx.stroke(ranges);
-        ctx.strokeStyle = STYLE.range.edge; ctx.lineWidth = 1.4 / k; ctx.stroke(ranges);
       }
       // заливка территорий — под горами и реками
       const visible = [];

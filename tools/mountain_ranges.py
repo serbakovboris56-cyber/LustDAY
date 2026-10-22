@@ -1,17 +1,17 @@
 """Горные хребты для assets/map.json из SVG-экспорта карты Figma.
 
 Берёт из экспорта растр биомов (маска суши) и растр «Карты высот» (тени рельефа),
-находит участки с сильным рельефом, сливает их в сплошные хребты с ровной кромкой
-и плотно расставляет значки вершин только внутри хребтов.
+находит участки с сильным рельефом, сливает их в сплошные хребты и вплотную
+расставляет значки вершин только внутри хребтов. Обводки у хребта нет: к краю
+вершины мельчают и редеют.
 
-    pip install numpy scipy scikit-image pillow
+    pip install numpy scipy pillow
     python3 tools/mountain_ranges.py экспорт.svg assets/map.json
 """
 import base64, io, json, re, sys
 import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
-from skimage import measure
 
 QUANTILE = 91.5      # доля суши с самым сильным рельефом, которая становится горами (~9%)
 MIN_CELLS = 10000    # хребты меньше этого (в клетках 2×2 px) отбрасываются
@@ -53,20 +53,6 @@ def mountain_mask(biomes, relief, peaks):
     return ndi.binary_fill_holes(keep[lab]) & land
 
 
-def outlines(mask):
-    f = ndi.gaussian_filter(mask.astype(np.float32), 3)
-    rings = []
-    for c in measure.find_contours(np.pad(f, 1), 0.5):
-        c = measure.approximate_polygon(c, 0.8)
-        if len(c) < 4:
-            continue
-        ring = [[int(round((p[1] - 1) * CELL)), int(round((p[0] - 1) * CELL))] for p in c]
-        if ring[0] != ring[-1]:
-            ring.append(ring[0])
-        rings.append(ring)
-    return rings
-
-
 def place_peaks(mask, map_h):
     depth = ndi.distance_transform_edt(mask) * CELL       # px карты от кромки хребта
     rng = np.random.default_rng(7)
@@ -78,18 +64,18 @@ def place_peaks(mask, map_h):
         for i in range(gx - R, gx + R + 1):
             for j in range(gy - R, gy + R + 1):
                 for px, py, pr in grid.get((i, j), ()):
-                    if (px - x) ** 2 + (py - y) ** 2 < (0.5 * (r + pr)) ** 2:
+                    if (px - x) ** 2 + (py - y) ** 2 < (0.4 * (r + pr)) ** 2:
                         return False
         return True
 
     for i in rng.permutation(len(ys)):
         d = depth[ys[i], xs[i]]
-        if d < 10:
+        if d < 4 or rng.random() > min(1, 0.35 + d / 90):   # край хребта редеет
             continue
         x, y = xs[i] * CELL + rng.uniform(0, CELL), ys[i] * CELL + rng.uniform(0, CELL)
         t = min(1, d / 220)                                  # к гребню вершины выше
-        s = 30 + 44 * t + rng.uniform(-5, 5)
-        if d < s * 0.45 or not free(x, y, s):
+        s = 24 + 50 * t + rng.uniform(-5, 5)
+        if d < s * 0.3 or not free(x, y, s):
             continue
         grid.setdefault((int(x // g), int(y // g)), []).append((x, y, s))
         cold = y < map_h * 0.22 or y > map_h * 0.78
@@ -103,10 +89,10 @@ def main(svg_path, map_path):
     data = json.load(open(map_path, encoding="utf-8"))
     biomes, relief = load_rasters(svg_path)
     mask = mountain_mask(biomes, relief, data["mountains"])
-    data["ranges"] = outlines(mask)
+    data.pop("ranges", None)
     data["mountains"] = place_peaks(mask, data["h"])
     json.dump(data, open(map_path, "w", encoding="utf-8"), separators=(",", ":"), ensure_ascii=False)
-    print(f"хребтов: {len(data['ranges'])}, вершин: {len(data['mountains'])}")
+    print(f"вершин: {len(data['mountains'])}")
 
 
 if __name__ == "__main__":
