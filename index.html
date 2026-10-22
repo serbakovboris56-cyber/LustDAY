@@ -60,11 +60,11 @@
   <form method="dialog" id="loginForm" class="login__form">
     <h2>Вход правителя</h2>
     <p class="login__hint" id="loginHint">Логин и пароль выдаёт администратор игры.</p>
-    <label>Логин <input name="login" autocomplete="username" required></label>
+    <label>Логин <input name="login" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
     <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
     <p class="login__error" id="loginError" role="alert"></p>
     <div class="login__actions">
-      <button class="btn btn--ghost" value="cancel" formnovalidate type="submit">Отмена</button>
+      <button class="btn btn--ghost" id="loginCancel" type="button">Отмена</button>
       <button class="btn" id="loginSubmit" type="submit" value="ok">Войти</button>
     </div>
   </form>
@@ -104,6 +104,13 @@
       <label>Год начала <input name="start_year" type="number"></label>
       <p class="admin__wide login__hint" id="saInfo"></p>
       <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сохранить настройки</button></div>
+    </form>
+
+    <form id="adminPassword" class="admin__add">
+      <h3>Пароль администратора</h3>
+      <label class="admin__wide">Новый пароль <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <p class="admin__wide login__hint">После смены вход под этим логином идёт по новому паролю, а не по секрету ADMIN_PASSWORD в Cloudflare.</p>
+      <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сменить пароль</button></div>
     </form>
   </div>
 </dialog>

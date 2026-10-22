@@ -54,9 +54,14 @@
     return r.json();
   }
   async function post(body) {
-    // text/plain — чтобы Apps Script принимал запрос без CORS-предзапроса
-    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
-    const res = await r.json();
+    // text/plain — запрос без CORS-предзапроса
+    let r, res;
+    try {
+      r = await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+    } catch {
+      throw new Error("Нет связи с сервером. Проверьте интернет; если сайт открыт не с serbakovboris56-cyber.github.io, сервер его не пустит.");
+    }
+    try { res = await r.json(); } catch { throw new Error(`Сервер ответил ошибкой (${r.status}).`); }
     if (res && res.auth) { saveSession(null); }
     if (!res || !res.ok) throw new Error((res && res.error) || "Сервер не ответил.");
     return res;
@@ -73,8 +78,9 @@
       return getJSON(DEMO ? "data/borders.geojson" : `${API}?action=borders`);
     },
     async login(login, password) {
+      login = login.trim();
       if (!DEMO) return post({ action: "login", login, password });
-      const u = DEMO_USERS[login.trim().toLowerCase()];
+      const u = DEMO_USERS[login.toLowerCase()];
       if (u && u.password === password) return { token: "demo", role: u.role, stateId: u.stateId };
       throw new Error("Неверный логин или пароль. В демо-режиме: demo / demo (игрок) или admin / admin.");
     },
@@ -414,8 +420,8 @@
       if (state.selected) renderPanel(state.byId.get(state.selected));
     } else openLogin();
   });
+  $("#loginCancel").addEventListener("click", () => $("#loginDialog").close());
   $("#loginForm").addEventListener("submit", async (e) => {
-    if (e.submitter && e.submitter.value === "cancel") return;
     e.preventDefault();
     const fd = new FormData(e.target);
     const btn = $("#loginSubmit");
@@ -457,8 +463,9 @@
     } catch (err) {
       $("#adminList").innerHTML = `<div class="crisis">${esc(err.message)}</div>`;
     }
-    const used = new Set(state.data.states.map((x) => String(x.color).toUpperCase()));
-    $("#adminAdd").color.value = PALETTE.find((c) => !used.has(c)) || PALETTE[state.data.states.length % PALETTE.length];
+    const states = (state.data && state.data.states) || [];
+    const used = new Set(states.map((x) => String(x.color).toUpperCase()));
+    $("#adminAdd").color.value = PALETTE.find((c) => !used.has(c)) || PALETTE[states.length % PALETTE.length];
   }
   function renderAdminList(rows) {
     state.adminRows = rows;
@@ -570,6 +577,15 @@
     try {
       await api.admin("adminSaveSettings", { settings: Object.fromEntries(new FormData(e.target).entries()) });
       adminMsg("Настройки сохранены.");
+    } catch (err) { adminMsg(err.message, true); }
+  });
+
+  $("#adminPassword").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api.admin("adminChangePassword", { password: e.target.password.value });
+      e.target.reset();
+      adminMsg("Пароль администратора изменён. Запомните его: в следующий раз входите с ним.");
     } catch (err) { adminMsg(err.message, true); }
   });
 
@@ -686,7 +702,7 @@
     labelsLayer.clearLayers();
     window.VPITerritoryEditor.open({
       map, nativeZ: NATIVE_Z,
-      states: state.data.states.map((s) => ({ id: s.id, name: s.name, color: s.color })),
+      states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
       save: async ({ grid, geometries }) => {
@@ -711,18 +727,24 @@
     renderBar();
   }
 
+  // Карта, цифры и границы грузятся независимо: сбой одного не мешает входу и остальному сайту.
   (async function boot() {
-    try {
-      const [data, geo, mapData] = await Promise.all([api.publicData(), api.borders(), getJSON("assets/map.json")]);
+    renderBar();
+    const mapReady = getJSON("assets/map.json").then((mapData) => {
       vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
-      applyPublic(data);
-      addBorders(geo);
-      const fromHash = location.hash.slice(1);
-      if (fromHash && state.byId.has(fromHash)) select(fromHash, { fly: true });
+    }).catch((err) => console.error("Карта не загрузилась", err));
+    const geoReady = api.borders().catch((err) => { console.error("Границы не загрузились", err); return null; });
+    try {
+      applyPublic(await api.publicData());
     } catch (err) {
-      $("#turnInfo").textContent = "Не удалось загрузить данные. Обновите страницу.";
+      state.data = { turn: 0, season: "", states: [] };
+      $("#turnInfo").textContent = "Не удалось загрузить данные государств. Обновите страницу позже.";
       console.error(err);
     }
+    const [, geo] = await Promise.all([mapReady, geoReady]);
+    addBorders(geo);
+    const fromHash = location.hash.slice(1);
+    if (fromHash && state.byId.has(fromHash)) select(fromHash, { fly: true });
   })();
 
   addEventListener("resize", () => map.invalidateSize());
