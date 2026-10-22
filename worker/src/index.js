@@ -529,7 +529,11 @@ async function stateRow(env, stateId) {
   return r;
 }
 
-const INPUT_RANGES = ["'Статистика'!B3", "'Регионы'!A4:R21", "'Ресурсы'!B4:B10", "'Расчёты'!B70:B73", "'Расчёты'!B85:B89", "'Расчёты'!B104", "'Расчёты'!B143:B144", "'Стройки'!O4"];
+const INPUT_RANGES = ["'Статистика'!B3", "'Регионы'!A4:R21", "'Ресурсы'!B4:B10", "'Расчёты'!B70:B73", "'Расчёты'!B85:B89", "'Расчёты'!B104", "'Расчёты'!B143:B144", "'Стройки'!O4",
+  "'Журнал'!A4:R4", "'Расчёты'!B105"];
+// Стартовые запасы — строка хода 0 Журнала (дальше остатки переносятся формулами) и «Клирика начало».
+// Колонки строки 4: I/J — фонд стройки (ремесло/монеты), O — склад, R — казна.
+const STOCK_CELLS = { fundCraft: 8, fundCoins: 9, warehouse: 14, treasury: 17 };
 
 async function adminReadInputs(env, stateId) {
   const r = await stateRow(env, stateId);
@@ -555,6 +559,7 @@ async function adminReadInputs(env, stateId) {
       loyaltyDelta: ESTATES.map((name, i) => ({ name, value: num(cell(v[4], i)) })),
       costs: { cleric: num(cell(v[5], 0)), craft: num(cell(v[6], 0)), coins: num(cell(v[6], 1)) },
       budgetPct: num(cell(v[7], 0)) || 30,
+      stocks: { ...Object.fromEntries(Object.entries(STOCK_CELLS).map(([k, j]) => [k, num(cell(v[8], 0, j))])), clerics: num(cell(v[9], 0)) },
     },
   };
 }
@@ -571,6 +576,12 @@ async function adminWriteInputs(env, ctx, stateId, inp) {
   if (inp.costs) {
     data.push({ range: "'Расчёты'!B104", values: [[n(inp.costs.cleric, 0)]] });
     data.push({ range: "'Расчёты'!B143:B144", values: [[n(inp.costs.craft, 0)], [n(inp.costs.coins, 0)]] });
+  }
+  if (inp.stocks && typeof inp.stocks === "object") {
+    const k = inp.stocks;
+    data.push({ range: "'Журнал'!I4:J4", values: [[n(k.fundCraft, 0), n(k.fundCoins, 0)]] },
+      { range: "'Журнал'!O4", values: [[n(k.warehouse)]] }, { range: "'Журнал'!R4", values: [[n(k.treasury)]] },
+      { range: "'Расчёты'!B105", values: [[n(k.clerics)]] });
   }
   if (inp.budgetPct !== undefined) data.push({ range: "'Стройки'!O4", values: [[Math.round(n(inp.budgetPct, 0, 100))]] });
   if (Array.isArray(inp.regions)) {
@@ -608,7 +619,7 @@ async function driveFetch(env, path, init = {}) {
   return data;
 }
 
-// Новое государство из шаблона.
+// Новое государство из шаблона или копией таблицы другого государства (st.from — его ID).
 // Робот Google не может владеть файлами (у сервисных аккаунтов нет места на Диске), поэтому копию создаёт
 // сам администратор по ссылке …/copy?copyCollaborators=true — копия наследует доступ робота, и сервер
 // находит её по имени и сам привязывает к государству (adminFindCopy).
@@ -618,12 +629,19 @@ async function adminCreateState(env, ctx, st) {
   const id = String(st.id).toLowerCase();
   if (await env.DB.prepare("SELECT id FROM states WHERE id = ?").bind(id).first()) return { ok: false, error: "Государство с таким ID уже есть." };
   const cfg = Object.fromEntries((await env.DB.prepare("SELECT key, value FROM settings").all()).results.map((r) => [r.key, r.value]));
-  if (!cfg.template) return { ok: false, error: "Не задан шаблон таблицы — укажите его в «Настройках» управления." };
+  let source = cfg.template;
+  if (st.from) {
+    const src = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(String(st.from)).first();
+    if (!src || !src.sheet_id) return { ok: false, error: "У государства-образца нет таблицы." };
+    source = src.sheet_id;
+  }
+  if (!source) return { ok: false, error: "Не задан шаблон таблицы — укажите его в «Настройках» управления." };
   const name = String(st.name || id).trim().slice(0, 80);
-  const saved = await adminSaveState(env, { ...st, id, name, active: true });
+  const { from, ...fields } = st;
+  const saved = await adminSaveState(env, { ...fields, id, name, active: true });
   if (!saved.ok) return saved;
   await env.KV.put("pending:" + id, JSON.stringify({ name: copyName(name), since: new Date(Date.now() - 60000).toISOString() }), { expirationTtl: 86400 });
-  const copyUrl = `https://docs.google.com/spreadsheets/d/${cfg.template}/copy?copyCollaborators=true&title=${encodeURIComponent(copyName(name))}`;
+  const copyUrl = `https://docs.google.com/spreadsheets/d/${source}/copy?copyCollaborators=true&title=${encodeURIComponent(copyName(name))}`;
   return { ok: true, id, copyUrl, copyName: copyName(name) };
 }
 
@@ -640,7 +658,7 @@ async function adminFindCopy(env, ctx, stateId) {
   const st = await env.DB.prepare("SELECT name FROM states WHERE id = ?").bind(id).first();
   await sheetsFetch(env, `/v4/spreadsheets/${f.id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: "'Статистика'!B3", values: [[st ? st.name : id]] }] }) }).catch(() => null);
   ctx.waitUntil(refreshSnapshot(env));
-  return { ok: true, found: true, sheetUrl: `https://docs.google.com/spreadsheets/d/${f.id}/edit` };
+  return { ok: true, found: true, sheetId: f.id, sheetUrl: `https://docs.google.com/spreadsheets/d/${f.id}/edit` };
 }
 
 // Кисть территорий: сетка клеток хранится в KV, контуры государств — в таблице borders.
