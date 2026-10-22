@@ -313,7 +313,7 @@ async function refreshSnapshot(env) {
     if (!r.sheet_id) return { ...base, public: {}, error: "нет ссылки на таблицу" };
     try {
       const d = parseLedger(await readSheetValues(env, r.sheet_id), cfg.startYear);
-      if (!base.name) base.name = d.sheetName || r.id;
+      if (!base.name) base.name = (d.sheetName && !d.sheetName.startsWith("[") ? d.sheetName : "") || r.id;
       turn = Math.max(turn, d.ledger.turn);
       return { ...base, public: d.public, ledger: d.ledger };
     } catch (e) {
