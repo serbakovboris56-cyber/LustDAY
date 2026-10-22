@@ -73,6 +73,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminReadInputs": await requireAdmin(env, body.token); return adminReadInputs(env, body.stateId);
     case "adminWriteInputs": await requireAdmin(env, body.token); return adminWriteInputs(env, ctx, body.stateId, body.inputs);
     case "adminCreateState": await requireAdmin(env, body.token); return adminCreateState(env, ctx, body.state);
+    case "adminFindCopy": await requireAdmin(env, body.token); return adminFindCopy(env, ctx, body.stateId);
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
     case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
     case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries);
@@ -374,6 +375,11 @@ function sheetIdFromLink(link) {
 }
 
 async function adminStates(env, ctx) {
+  // недоделанные копии шаблона: пробуем найти и привязать
+  for (const r of await registry(env)) {
+    if (r.sheet_id || !(await env.KV.get("pending:" + r.id))) continue;
+    try { await adminFindCopy(env, ctx, r.id); } catch { /* попробуем в следующий раз */ }
+  }
   const [regs, snap] = await Promise.all([registry(env), getSnapshot(env, ctx).catch(() => ({ states: [] }))]);
   return regs.map((r) => {
     const s = snap.states.find((x) => x.id === r.id);
@@ -552,7 +558,11 @@ async function driveFetch(env, path, init = {}) {
   return data;
 }
 
-// Новое государство одной кнопкой: копия шаблона «Хроники» → имя → доступ админу → запись в реестр.
+// Новое государство из шаблона.
+// Робот Google не может владеть файлами (у сервисных аккаунтов нет места на Диске), поэтому копию создаёт
+// сам администратор по ссылке …/copy?copyCollaborators=true — копия наследует доступ робота, и сервер
+// находит её по имени и сам привязывает к государству (adminFindCopy).
+const copyName = (name) => `ВПИ — ${name}`;
 async function adminCreateState(env, ctx, st) {
   if (!st || !/^[a-z0-9_-]{2,20}$/i.test(String(st.id || ""))) return { ok: false, error: "ID: 2–20 латинских букв или цифр." };
   const id = String(st.id).toLowerCase();
@@ -560,15 +570,27 @@ async function adminCreateState(env, ctx, st) {
   const cfg = Object.fromEntries((await env.DB.prepare("SELECT key, value FROM settings").all()).results.map((r) => [r.key, r.value]));
   if (!cfg.template) return { ok: false, error: "Не задан шаблон таблицы — укажите его в «Настройках» управления." };
   const name = String(st.name || id).trim().slice(0, 80);
-  const copy = await driveFetch(env, `/files/${cfg.template}/copy?fields=id`, { method: "POST", body: JSON.stringify({ name: `ВПИ — ${name}` }) });
-  if (cfg.admin_email) {
-    await driveFetch(env, `/files/${copy.id}/permissions?sendNotificationEmail=false`, { method: "POST", body: JSON.stringify({ role: "writer", type: "user", emailAddress: cfg.admin_email }) });
-  }
-  await sheetsFetch(env, `/v4/spreadsheets/${copy.id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: "'Статистика'!B3", values: [[name]] }] }) }).catch(() => null);
-  const saved = await adminSaveState(env, { ...st, id, name, link: copy.id, active: true });
+  const saved = await adminSaveState(env, { ...st, id, name, active: true });
   if (!saved.ok) return saved;
+  await env.KV.put("pending:" + id, JSON.stringify({ name: copyName(name), since: new Date(Date.now() - 60000).toISOString() }), { expirationTtl: 86400 });
+  const copyUrl = `https://docs.google.com/spreadsheets/d/${cfg.template}/copy?copyCollaborators=true&title=${encodeURIComponent(copyName(name))}`;
+  return { ok: true, id, copyUrl, copyName: copyName(name) };
+}
+
+async function adminFindCopy(env, ctx, stateId) {
+  const id = String(stateId || "");
+  const pending = JSON.parse((await env.KV.get("pending:" + id)) || "null");
+  if (!pending) return { ok: false, error: "Нет ожидающей копии для этого государства." };
+  const q = `name = '${pending.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and createdTime > '${pending.since}'`;
+  const list = await driveFetch(env, `/files?q=${encodeURIComponent(q)}&orderBy=createdTime desc&pageSize=1&fields=files(id,name)`);
+  const f = list.files && list.files[0];
+  if (!f) return { ok: true, found: false };
+  await env.DB.prepare("UPDATE states SET sheet_id = ? WHERE id = ?").bind(f.id, id).run();
+  await env.KV.delete("pending:" + id);
+  const st = await env.DB.prepare("SELECT name FROM states WHERE id = ?").bind(id).first();
+  await sheetsFetch(env, `/v4/spreadsheets/${f.id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: "'Статистика'!B3", values: [[st ? st.name : id]] }] }) }).catch(() => null);
   ctx.waitUntil(refreshSnapshot(env));
-  return { ok: true, id, sheetUrl: `https://docs.google.com/spreadsheets/d/${copy.id}/edit` };
+  return { ok: true, found: true, sheetUrl: `https://docs.google.com/spreadsheets/d/${f.id}/edit` };
 }
 
 // Кисть территорий: сетка клеток хранится в KV, контуры государств — в таблице borders.

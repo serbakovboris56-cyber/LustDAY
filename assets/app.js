@@ -521,10 +521,14 @@
     try {
       if (source === "create") {
         delete st.link;
-        adminMsg("Копирую шаблон таблицы…");
-        const res = await api.admin("adminCreateState", { state: st });
-        adminMsg(`Государство «${st.name}» создано, таблица готова. Задайте игроку пароль.`);
-        if (res.sheetUrl) window.open(res.sheetUrl, "_blank", "noopener");
+        // вкладку открываем сразу, пока действует нажатие кнопки, иначе браузер её заблокирует
+        const tab = window.open("about:blank", "_blank");
+        let res;
+        try { res = await api.admin("adminCreateState", { state: st }); } catch (err) { if (tab) tab.close(); throw err; }
+        if (tab) tab.location.href = res.copyUrl; else window.open(res.copyUrl, "_blank");
+        adminMsg(`Во вкладке Google нажмите «Создать копию» (имя «${res.copyName}» уже подставлено). Я жду копию и привяжу её сам…`);
+        const found = await waitForCopy(res.id);
+        adminMsg(found ? `Готово: таблица «${res.copyName}» привязана к государству. Задайте игроку пароль.` : `Копия пока не найдена. Когда создадите её, просто откройте «Управление» заново — я привяжу её сам. Или укажите ссылку вручную.`, !found);
       } else {
         await api.admin("adminSaveState", { state: st });
         adminMsg(`Государство «${st.name}» сохранено. Задайте пароль и нажмите «Обновить данные из таблиц».`);
@@ -536,6 +540,17 @@
     } catch (err) { adminMsg(err.message, true); }
     finally { btn.disabled = false; }
   });
+
+  async function waitForCopy(stateId) {
+    for (let i = 0; i < 60; i++) {                     // до 3 минут
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const r = await api.admin("adminFindCopy", { stateId });
+        if (r.found) return true;
+      } catch (err) { adminMsg(err.message, true); return false; }
+    }
+    return false;
+  }
 
   // настройки сервера
   async function loadSettings() {
