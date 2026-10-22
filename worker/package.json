@@ -1,5 +1,5 @@
 {
-  "name": "vpi-api",
+  "name": "lustday",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
