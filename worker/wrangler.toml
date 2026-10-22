@@ -13,11 +13,11 @@ crons = ["*/10 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "vpi"
-database_id = "REPLACE_WITH_D1_ID"
+database_id = "750afa31-6fba-488a-8e56-cd100ebad4f5"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_KV_ID"
+id = "c08a0cac09774b048df08372ec9c7efb"
 
 # Секреты задаются в панели Cloudflare (Settings → Variables and Secrets), не здесь:
 #   GOOGLE_SA_KEY   — JSON-ключ сервисного аккаунта Google целиком
