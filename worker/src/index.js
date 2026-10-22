@@ -4,7 +4,7 @@
  * Цифры берутся из Google-таблиц «Хроники» (Код.gs v15) через сервисный аккаунт Google.
  */
 
-const TOKEN_DAYS = 14;
+const TOKEN_DAYS = 30;   // сессия продлевается при каждом открытии сайта (action session)
 const SNAPSHOT_MAX_AGE = 30 * 60 * 1000;   // старше — пересобрать прямо в запросе
 const COLORS = ["#C8463A", "#3D7FCF", "#3E9E62", "#C9A646", "#9277C9", "#4FA3A0", "#B8734A", "#D46A9F", "#7E8C99", "#8FB34A", "#E08A3C", "#5B6FD6", "#A64A6E", "#3FB6C9", "#B0A060"];
 const ESTATES = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
@@ -63,6 +63,7 @@ async function handlePost(body, env, ctx, request) {
   switch (body.action) {
     case "login": return login(env, body.login, body.password, request);
     case "ledger": return ledger(env, ctx, body.token, body.stateId);
+    case "session": return renewSession(env, body.token);
     case "adminRefresh": await requireAdmin(env, body.token); await refreshSnapshot(env); return { ok: true, ...(await publicPayload(env, ctx)) };
     case "adminStates": await requireAdmin(env, body.token); return { ok: true, states: await adminStates(env, ctx) };
     case "adminSaveState": await requireAdmin(env, body.token); return adminSaveState(env, body.state);
@@ -204,6 +205,17 @@ async function login(env, loginRaw, passwordRaw, request) {
   const st = await env.DB.prepare("SELECT id, pass_hash, salt FROM states WHERE lower(login) = ? AND login <> ''").bind(loginName).first();
   if (!st || !st.pass_hash) { await hashPassword(env, password, "dummy"); return failed(); }   // одинаковое время ответа
   return timingSafeEqual(await hashPassword(env, password, st.salt), st.pass_hash) ? passed({ role: "player", stateId: st.id, login: loginName }) : failed();
+}
+
+// Продление входа: сайт присылает сохранённый токен при открытии и получает свежий на TOKEN_DAYS дней.
+async function renewSession(env, token) {
+  const t = await readToken(env, token);
+  if (t.role === "player") {
+    const st = await env.DB.prepare("SELECT id FROM states WHERE id = ? AND lower(login) = ?").bind(t.stateId || "", t.login || "").first();
+    if (!st) throw new HttpError("Учётная запись изменилась. Войдите снова.", { auth: true });
+  }
+  const data = { role: t.role, login: t.login, stateId: t.stateId || undefined };
+  return { ok: true, token: await makeToken(env, data), role: t.role, stateId: t.stateId || null };
 }
 
 async function ledger(env, ctx, token, stateId) {

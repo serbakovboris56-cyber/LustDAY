@@ -420,6 +420,21 @@
       if (state.selected) renderPanel(state.byId.get(state.selected));
     } else openLogin();
   });
+  // Предложить браузеру сохранить логин и пароль (Chrome, Edge); остальные браузеры сохраняют сами по форме.
+  function rememberCredentials(form) {
+    try {
+      if (window.PasswordCredential && navigator.credentials) navigator.credentials.store(new PasswordCredential(form)).catch(() => {});
+    } catch { /* браузер не поддерживает */ }
+  }
+  // Сохранённая сессия продлевается при каждом открытии сайта: пока сайт открывают хотя бы раз в месяц, вход не нужен.
+  async function renewSession() {
+    const ses = state.session;
+    if (!ses || DEMO) return;
+    try {
+      const res = await post({ action: "session", token: ses.token });
+      saveSession({ ...ses, token: res.token, role: res.role, stateId: res.stateId });
+    } catch { /* нет связи — оставляем старый токен; истёкший post() сбросит сам */ }
+  }
   $("#loginCancel").addEventListener("click", () => $("#loginDialog").close());
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -430,6 +445,7 @@
     try {
       const res = await api.login(String(fd.get("login")), String(fd.get("password")));
       saveSession({ token: res.token, role: res.role, stateId: res.stateId, demo: DEMO });
+      rememberCredentials(e.target);
       $("#loginDialog").close();
       if (res.stateId) select(res.stateId, { fly: true });
       else if (state.selected) renderPanel(state.byId.get(state.selected));
@@ -762,6 +778,7 @@
   // Карта, цифры и границы грузятся независимо: сбой одного не мешает входу и остальному сайту.
   (async function boot() {
     renderBar();
+    renewSession();
     const mapReady = getJSON("assets/map.json").then((mapData) => {
       vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
     }).catch((err) => console.error("Карта не загрузилась", err));
