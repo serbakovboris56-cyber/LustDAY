@@ -24,3 +24,7 @@ id = "c08a0cac09774b048df08372ec9c7efb"
 # Секреты задаются в панели Cloudflare (Settings → Variables and Secrets), не здесь:
 #   GOOGLE_SA_KEY   — JSON-ключ сервисного аккаунта Google целиком
 #   ADMIN_PASSWORD  — пароль администратора (логин admin)
+
+# Превью для веток и PR: сборка Cloudflare запускает «npx wrangler preview», и без этого блока она падает.
+# Превью не наследуют привязки, а базу D1 и KV игры сюда намеренно не добавляем, чтобы ветки не трогали живые данные.
+[previews]
