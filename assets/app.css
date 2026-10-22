@@ -366,3 +366,4 @@ button { font: inherit; color: inherit; }
 #statsDialog .login__form, #adminDialog .login__form { min-width: 0; }
 .stats__grid input, .admin__add input:not([type="radio"]):not([type="color"]) { width: 100%; min-width: 0; }
 #statsDialog .login__hint { overflow-wrap: anywhere; }
+.login__form { grid-template-columns: minmax(0, 1fr); }
