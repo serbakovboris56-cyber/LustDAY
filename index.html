@@ -117,6 +117,20 @@
   </div>
 </dialog>
 
+<dialog class="login confirm" id="deleteDialog">
+  <form class="login__form" id="deleteForm">
+    <label class="confirm__check confirm__check--top"><input type="checkbox" name="c1"> Да, удалить</label>
+    <h2>Удалить государство?</h2>
+    <p class="login__hint" id="deleteText"></p>
+    <p class="login__error" id="deleteMsg" role="alert"></p>
+    <div class="login__actions confirm__actions">
+      <button class="btn btn--ghost" id="deleteCancel" type="button">Отмена</button>
+      <button class="btn btn--danger" id="deleteGo" type="submit" disabled>Удалить навсегда</button>
+    </div>
+    <label class="confirm__check confirm__check--bottom"><input type="checkbox" name="c2"> Я понимаю, что это не отменить</label>
+  </form>
+</dialog>
+
 <dialog class="login admin" id="statsDialog">
   <form class="login__form" id="statsForm">
     <div class="admin__head">

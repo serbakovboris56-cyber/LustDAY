@@ -494,7 +494,8 @@
               <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name || r.id)}<div class="muted">${esc(r.id)}${r.active ? "" : ", скрыто"}</div></td>
               <td>${esc(r.login || "—")}<div class="muted">${r.hasPassword ? "пароль задан" : "пароля нет"}</div></td>
               <td class="${r.error ? "balance--deficit" : "balance--surplus"}">${esc(r.error || (r.linked ? "данные получены" : "нет ссылки"))}
-                ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button> <button type="button" class="linklike" data-copy="${esc(r.id)}">Копия</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}</td>
+                ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button> <button type="button" class="linklike" data-copy="${esc(r.id)}">Копия</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}
+                <div class="admin__links"><button type="button" class="linklike linklike--danger" data-delete="${esc(r.id)}">Удалить</button></div></td>
               <td><form class="pw-form" data-id="${esc(r.id)}"><input name="pw" type="text" minlength="6" placeholder="от 6 символов" aria-label="Новый пароль для ${esc(r.name)}" required><button class="btn btn--ghost" type="submit">Задать</button></form></td>
             </tr>`).join("")}
         </tbody>
@@ -513,6 +514,8 @@
   $("#adminList").addEventListener("click", (e) => {
     const b = e.target.closest("[data-stats]");
     if (b) { const row = state.adminRows && state.adminRows.find((r) => r.id === b.dataset.stats); openStats(b.dataset.stats, row && row.sheetId); }
+    const d = e.target.closest("[data-delete]");
+    if (d) openDelete(state.adminRows.find((r) => r.id === d.dataset.delete));
     const c = e.target.closest("[data-copy]");
     if (c) {
       // копия готовой таблицы: форма ниже, образец уже выбран — осталось ID и название
@@ -525,6 +528,39 @@
     }
   });
   $("#adminClose").addEventListener("click", () => $("#adminDialog").close());
+
+  // Удаление: кнопка оживает, только когда отмечены обе галочки (верхняя слева и нижняя справа).
+  let deleting = null;
+  function openDelete(row) {
+    if (!row) return;
+    deleting = row;
+    const f = $("#deleteForm");
+    f.reset();
+    $("#deleteGo").disabled = true;
+    $("#deleteMsg").textContent = "";
+    $("#deleteText").textContent = `«${row.name || row.id}» (${row.id}) исчезнет с сайта вместе с границами на карте, логин игрока перестанет работать. Таблица Google останется на Диске.`;
+    $("#deleteDialog").showModal();
+  }
+  $("#deleteForm").addEventListener("change", (e) => {
+    const f = e.currentTarget;
+    $("#deleteGo").disabled = !(f.c1.checked && f.c2.checked);
+  });
+  $("#deleteCancel").addEventListener("click", () => $("#deleteDialog").close());
+  $("#deleteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    if (!deleting || !(f.c1.checked && f.c2.checked)) return;
+    $("#deleteGo").disabled = true;
+    try {
+      await api.admin("adminDeleteState", { stateId: deleting.id });
+      $("#deleteDialog").close();
+      if (state.selected === deleting.id) closePanel();
+      adminMsg(`Государство «${deleting.name || deleting.id}» удалено.`);
+      bordersGeo = await api.borders();
+      await reloadPublic();
+      openAdmin(true);
+    } catch (err) { $("#deleteMsg").textContent = err.message; $("#deleteGo").disabled = false; }
+  });
   $("#adminList").addEventListener("submit", async (e) => {
     const form = e.target.closest(".pw-form");
     if (!form) return;

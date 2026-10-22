@@ -345,6 +345,16 @@ button { font: inherit; color: inherit; }
 .linklike { background: none; border: 0; padding: 0; color: var(--gold); text-decoration: underline; cursor: pointer; font-size: 13px; }
 .admin__links { margin-top: 4px; display: flex; gap: 10px; font-size: 13px; }
 .admin__links a { color: var(--gold); }
+.linklike--danger { color: var(--deficit); }
+
+/* удаление: две галочки в разных углах окна, обе обязательны */
+.confirm { width: min(440px, calc(100% - 32px)); }
+.confirm__check { display: flex !important; align-items: center; gap: 8px; color: var(--gold) !important; }
+.confirm__check input { width: 18px; height: 18px; accent-color: var(--deficit); }
+.confirm__check--top { justify-self: start; }
+.confirm__check--bottom { justify-self: end; margin-top: 8px; }
+.btn--danger { background: var(--deficit); border-color: var(--deficit); color: #000; }
+.btn--danger:disabled { opacity: 0.35; cursor: not-allowed; }
 .admin__source { border: 1px solid var(--rule); padding: 8px 12px; display: flex; gap: 18px; flex-wrap: wrap; }
 .admin__source legend { color: var(--gold-soft); font-size: 14px; padding: 0 4px; }
 .admin__source label { display: flex; align-items: center; gap: 6px; color: var(--gold); }

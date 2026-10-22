@@ -461,10 +461,20 @@ async function adminSaveState(env, st) {
 }
 
 async function adminDeleteState(env, stateId) {
-  await env.DB.batch([
+  stateId = String(stateId || "");
+  const r = await env.DB.batch([
     env.DB.prepare("DELETE FROM states WHERE id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(stateId),
   ]);
+  if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
+  await env.KV.delete("pending:" + stateId);
+  // убираем из снимка сразу, иначе государство висело бы на сайте до следующего сбора цифр
+  const text = await env.KV.get("snapshot");
+  if (text) {
+    const snap = JSON.parse(text);
+    snap.states = snap.states.filter((x) => x.id !== stateId);
+    await env.KV.put("snapshot", JSON.stringify(snap));
+  }
   return { ok: true };
 }
 
