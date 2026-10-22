@@ -91,8 +91,10 @@
       <fieldset class="admin__wide admin__source">
         <legend>Таблица статистики</legend>
         <label><input type="radio" name="source" value="create" checked> Создать новую из шаблона</label>
+        <label><input type="radio" name="source" value="copy"> Копия таблицы государства</label>
         <label><input type="radio" name="source" value="link"> Указать готовую</label>
       </fieldset>
+      <label class="admin__wide" id="fromField" hidden>Копировать таблицу государства <select name="from"></select></label>
       <label class="admin__wide" id="linkField" hidden>Ссылка на таблицу государства <input name="link" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
       <div class="admin__wide"><button class="btn" type="submit">Сохранить государство</button></div>
     </form>
@@ -113,6 +115,20 @@
       <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сменить пароль</button></div>
     </form>
   </div>
+</dialog>
+
+<dialog class="login confirm" id="deleteDialog">
+  <form class="login__form" id="deleteForm">
+    <label class="confirm__check confirm__check--top"><input type="checkbox" name="c1"> Да, удалить</label>
+    <h2>Удалить государство?</h2>
+    <p class="login__hint" id="deleteText"></p>
+    <p class="login__error" id="deleteMsg" role="alert"></p>
+    <div class="login__actions confirm__actions">
+      <button class="btn btn--ghost" id="deleteCancel" type="button">Отмена</button>
+      <button class="btn btn--danger" id="deleteGo" type="submit" disabled>Удалить навсегда</button>
+    </div>
+    <label class="confirm__check confirm__check--bottom"><input type="checkbox" name="c2"> Я понимаю, что это не отменить</label>
+  </form>
 </dialog>
 
 <dialog class="login admin" id="statsDialog">

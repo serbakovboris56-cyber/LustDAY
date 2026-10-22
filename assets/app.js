@@ -494,18 +494,73 @@
               <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name || r.id)}<div class="muted">${esc(r.id)}${r.active ? "" : ", скрыто"}</div></td>
               <td>${esc(r.login || "—")}<div class="muted">${r.hasPassword ? "пароль задан" : "пароля нет"}</div></td>
               <td class="${r.error ? "balance--deficit" : "balance--surplus"}">${esc(r.error || (r.linked ? "данные получены" : "нет ссылки"))}
-                ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}</td>
+                ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button> <button type="button" class="linklike" data-copy="${esc(r.id)}">Копия</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}
+                <div class="admin__links"><button type="button" class="linklike linklike--danger" data-delete="${esc(r.id)}">Удалить</button></div></td>
               <td><form class="pw-form" data-id="${esc(r.id)}"><input name="pw" type="text" minlength="6" placeholder="от 6 символов" aria-label="Новый пароль для ${esc(r.name)}" required><button class="btn btn--ghost" type="submit">Задать</button></form></td>
             </tr>`).join("")}
         </tbody>
       </table>` : `<p class="muted">Государств пока нет. Добавьте первое формой ниже.</p>`;
+    const from = $("#adminAdd").from, keep = from.value;
+    from.innerHTML = rows.filter((r) => r.linked).map((r) => `<option value="${esc(r.id)}">${esc(r.name || r.id)}</option>`).join("");
+    if (keep) from.value = keep;
+  }
+  function setSource(value) {
+    const f = $("#adminAdd");
+    f.querySelector(`[name=source][value=${value}]`).checked = true;
+    $("#linkField").hidden = value !== "link";
+    $("#fromField").hidden = value !== "copy";
   }
   $("#adminBtn").addEventListener("click", () => openAdmin());
   $("#adminList").addEventListener("click", (e) => {
     const b = e.target.closest("[data-stats]");
     if (b) { const row = state.adminRows && state.adminRows.find((r) => r.id === b.dataset.stats); openStats(b.dataset.stats, row && row.sheetId); }
+    const d = e.target.closest("[data-delete]");
+    if (d) openDelete(state.adminRows.find((r) => r.id === d.dataset.delete));
+    const c = e.target.closest("[data-copy]");
+    if (c) {
+      // копия готовой таблицы: форма ниже, образец уже выбран — осталось ID и название
+      const f = $("#adminAdd");
+      setSource("copy");
+      f.from.value = c.dataset.copy;
+      f.scrollIntoView({ behavior: "smooth", block: "start" });
+      f.id.focus({ preventScroll: true });
+      adminMsg("Введите ID и название нового государства — его таблица будет копией выбранной.");
+    }
   });
   $("#adminClose").addEventListener("click", () => $("#adminDialog").close());
+
+  // Удаление: кнопка оживает, только когда отмечены обе галочки (верхняя слева и нижняя справа).
+  let deleting = null;
+  function openDelete(row) {
+    if (!row) return;
+    deleting = row;
+    const f = $("#deleteForm");
+    f.reset();
+    $("#deleteGo").disabled = true;
+    $("#deleteMsg").textContent = "";
+    $("#deleteText").textContent = `«${row.name || row.id}» (${row.id}) исчезнет с сайта вместе с границами на карте, логин игрока перестанет работать. Таблица Google останется на Диске.`;
+    $("#deleteDialog").showModal();
+  }
+  $("#deleteForm").addEventListener("change", (e) => {
+    const f = e.currentTarget;
+    $("#deleteGo").disabled = !(f.c1.checked && f.c2.checked);
+  });
+  $("#deleteCancel").addEventListener("click", () => $("#deleteDialog").close());
+  $("#deleteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    if (!deleting || !(f.c1.checked && f.c2.checked)) return;
+    $("#deleteGo").disabled = true;
+    try {
+      await api.admin("adminDeleteState", { stateId: deleting.id });
+      $("#deleteDialog").close();
+      if (state.selected === deleting.id) closePanel();
+      adminMsg(`Государство «${deleting.name || deleting.id}» удалено.`);
+      bordersGeo = await api.borders();
+      await reloadPublic();
+      openAdmin(true);
+    } catch (err) { $("#deleteMsg").textContent = err.message; $("#deleteGo").disabled = false; }
+  });
   $("#adminList").addEventListener("submit", async (e) => {
     const form = e.target.closest(".pw-form");
     if (!form) return;
@@ -531,18 +586,19 @@
     finally { b.disabled = false; }
   });
   $("#adminAdd").addEventListener("change", (e) => {
-    if (e.target.name === "source") $("#linkField").hidden = e.target.value !== "link";
+    if (e.target.name === "source") setSource(e.target.value);
   });
   $("#adminAdd").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const st = Object.fromEntries(fd.entries());
     const source = st.source; delete st.source;
+    if (source !== "copy") delete st.from;
     st.active = true;
     const btn = e.target.querySelector("button[type=submit]");
     btn.disabled = true;
     try {
-      if (source === "create") {
+      if (source === "create" || source === "copy") {
         delete st.link;
         // вкладку открываем сразу, пока действует нажатие кнопки, иначе браузер её заблокирует
         const tab = window.open("about:blank", "_blank");
@@ -552,12 +608,13 @@
         adminMsg(`Во вкладке Google нажмите «Создать копию» (имя «${res.copyName}» уже подставлено). Я жду копию и привяжу её сам…`);
         const found = await waitForCopy(res.id);
         adminMsg(found ? `Готово: таблица «${res.copyName}» привязана к государству. Задайте игроку пароль.` : `Копия пока не найдена. Когда создадите её, просто откройте «Управление» заново — я привяжу её сам. Или укажите ссылку вручную.`, !found);
+        if (found) { e.target.reset(); setSource("create"); await reloadPublic(); openAdmin(true); openStats(res.id, found.sheetId); return; }
       } else {
         await api.admin("adminSaveState", { state: st });
         adminMsg(`Государство «${st.name}» сохранено. Задайте пароль и нажмите «Обновить данные из таблиц».`);
       }
       e.target.reset();
-      $("#linkField").hidden = true;
+      setSource("create");
       await reloadPublic();
       openAdmin(true);
     } catch (err) { adminMsg(err.message, true); }
@@ -569,7 +626,7 @@
       await new Promise((r) => setTimeout(r, 3000));
       try {
         const r = await api.admin("adminFindCopy", { stateId });
-        if (r.found) return true;
+        if (r.found) return r;
       } catch (err) { adminMsg(err.message, true); return false; }
     }
     return false;
@@ -650,6 +707,16 @@
         </table></div>
         <button type="button" class="btn btn--ghost" id="addRegion">Добавить регион</button>
       </section>
+      <section class="section"><h3>Стартовые запасы (ход 0)</h3>
+        <p class="login__hint">Остатки, с которых государство начинает игру. Дальше таблица переносит их из хода в ход сама.</p>
+        <div class="stats__grid">
+          <label>Казна, монеты <input name="sk_treasury" type="number" value="${i.stocks.treasury}"></label>
+          <label>Склад, ремесло <input name="sk_warehouse" type="number" value="${i.stocks.warehouse}"></label>
+          <label>Фонд стройки, ремесло <input name="sk_fundCraft" type="number" min="0" value="${i.stocks.fundCraft}"></label>
+          <label>Фонд стройки, монеты <input name="sk_fundCoins" type="number" min="0" value="${i.stocks.fundCoins}"></label>
+          <label>Клирика сейчас <input name="sk_clerics" type="number" step="0.01" value="${i.stocks.clerics}"></label>
+        </div>
+      </section>
       <section class="section"><h3>Ресурсы (число источников)</h3>
         <div class="stats__grid">${i.resources.map((r, k) => `<label>${esc(r.name)} <input name="res${k}" type="number" min="0" max="99" value="${r.count}"></label>`).join("")}</div>
       </section>
@@ -692,6 +759,7 @@
       resources: [0, 1, 2, 3, 4, 5, 6].map((k) => ({ count: Number(val("res" + k)) || 0 })),
       costs: { craft: Number(val("ccraft")) || 0, coins: Number(val("ccoins")) || 0, cleric: Number(val("ccleric")) || 0 },
       budgetPct: Number(val("budget")) || 0,
+      stocks: Object.fromEntries(["treasury", "warehouse", "fundCraft", "fundCoins", "clerics"].map((k) => [k, Number(val("sk_" + k)) || 0])),
       loyaltyDelta: [0, 1, 2, 3, 4].map((k) => ({ value: Number(val("ld" + k)) || 0 })),
       crises: [0, 1, 2, 3].map((k) => ({ on: !!(f.elements["cr" + k] && f.elements["cr" + k].checked) })),
     };
