@@ -1,6 +1,9 @@
 /* Редактор территорий кистью (только для администратора).
  * Карта делится на сетку клеток 8×8 пикселей исходной карты; кисть красит клетки суши в цвет государства,
  * ластик снимает принадлежность. При сохранении клетки каждого государства превращаются в контур (d3-contour).
+ * Чтобы заливка ложилась на сушу без дыр: прибрежные клетки (суши меньше половины) тоже красятся,
+ * мелкие пропуски у берега и замкнутые дыры внутри государства заполняются сами, а контур выходит
+ * на клетку в море — на карте территория обрезается по берегу, так что заливка доходит до самой кромки.
  */
 (function () {
   "use strict";
@@ -56,17 +59,86 @@
     return pts.filter((_, i) => keep[i]);
   }
 
-  function gridToGeometry(owner, idx, W, H) {
+  // Соседи клетки (8 направлений) в пределах сетки
+  function eachNeighbor(i, W, H, fn) {
+    const x = i % W, y = (i - x) / W;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = x + dx, ny = y + dy;
+      if (nx >= 0 && ny >= 0 && nx < W && ny < H) fn(ny * W + nx);
+    }
+  }
+
+  /* Заполняет пропуски, которые кисть оставляет у берега и внутри территории. Возвращает число заполненных клеток.
+   * 1) Береговая клетка без хозяина, у которой не меньше трёх соседей одного государства и не больше одной
+   *    ничьей клетки суши, отходит этому государству (зубцы и полоски вдоль берега, заливов, проливов).
+   * 2) Ничья суша, со всех сторон окружённая одним государством (без выхода к морю и к другим), — тоже его.
+   * Повторный запуск ничего не меняет, так что территория не расползается от сохранения к сохранению. */
+  function fillGaps(owner, land, W, H) {
+    const N = W * H;
+    let filled = 0;
+    const shore = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      if (!land[i]) continue;
+      if (land[i] === 2) { shore[i] = 1; continue; }
+      eachNeighbor(i, W, H, (j) => { if (!land[j]) shore[i] = 1; });
+    }
+    const counts = new Uint16Array(256);
+    for (let changed = true, pass = 0; changed && pass < 50; pass++) {
+      changed = false;
+      for (let i = 0; i < N; i++) {
+        if (!shore[i] || owner[i]) continue;
+        let free = 0, best = 0, bestN = 0;
+        const seen = [];
+        eachNeighbor(i, W, H, (j) => {
+          if (!land[j]) return;
+          const o = owner[j];
+          if (!o) { free++; return; }
+          if (!counts[o]) seen.push(o);
+          if (++counts[o] > bestN) { bestN = counts[o]; best = o; }
+        });
+        for (const o of seen) counts[o] = 0;
+        if (best && bestN >= 3 && free <= 1) { owner[i] = best; filled++; changed = true; }
+      }
+    }
+    // замкнутые дыры
+    const seenHole = new Uint8Array(N), queue = new Int32Array(N);
+    for (let s = 0; s < N; s++) {
+      if (!land[s] || owner[s] || seenHole[s]) continue;
+      let head = 0, tail = 0, by = 0, open = false;
+      queue[tail++] = s; seenHole[s] = 1;
+      while (head < tail) {
+        const i = queue[head++], x = i % W;
+        if (x === 0 || x === W - 1 || i < W || i >= N - W) open = true;
+        for (const j of [i - W, i + W, x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1]) {
+          if (j < 0 || j >= N) continue;
+          if (!land[j]) { open = true; continue; }
+          const o = owner[j];
+          if (o) { if (!by) by = o; else if (by !== o) open = true; continue; }
+          if (!seenHole[j]) { seenHole[j] = 1; queue[tail++] = j; }
+        }
+      }
+      if (!open && by) { for (let k = 0; k < tail; k++) owner[queue[k]] = by; filled += tail; }
+    }
+    return filled;
+  }
+
+  function gridToGeometry(owner, land, idx, W, H) {
     const values = new Float64Array(W * H);
     let any = false;
     for (let i = 0; i < owner.length; i++) if (owner[i] === idx) { values[i] = 1; any = true; }
     if (!any) return null;
+    // клетка моря вокруг суши государства: на карте заливка обрезается по берегу и доходит до кромки
+    for (let i = 0; i < owner.length; i++) {
+      if (land[i] || values[i]) continue;
+      eachNeighbor(i, W, H, (j) => { if (owner[j] === idx) values[i] = 0.75; });
+    }
     const mp = window.d3.contours().size([W, H]).thresholds([0.5])(values)[0];
     const polys = [];
     for (const poly of mp.coordinates) {
       const rings = [];
       for (const ring of poly) {
-        const pts = simplify(ring, 0.9).map(([x, y]) => [Math.round(x * CELL), Math.round(y * CELL)]);
+        const pts = simplify(ring, 0.5).map(([x, y]) => [Math.round(x * CELL), Math.round(y * CELL)]);
         if (pts.length >= 4) rings.push(pts);
       }
       if (rings.length && rings[0].length >= 4) polys.push(rings);
@@ -101,7 +173,8 @@
     const landImg = await loadImageData("assets/land_grid.png");
     const W = landImg.width, H = landImg.height;
     const land = new Uint8Array(W * H);
-    for (let i = 0; i < W * H; i++) land[i] = landImg.data[i * 4] > 127 ? 1 : 0;
+    // 1 — суша, 2 — прибрежная клетка (суши меньше половины), 0 — вода; см. tools/land_grid.py
+    for (let i = 0; i < W * H; i++) { const v = landImg.data[i * 4]; land[i] = v > 191 ? 1 : v > 63 ? 2 : 0; }
 
     // владельцы: индекс 1..n -> id государства
     let owners = opts.states.map((s) => s.id);
@@ -126,6 +199,10 @@
       });
     }
 
+    // старые раскраски делались по более грубой сетке — сразу добираем пропуски у берега
+    const gapsOnOpen = saved || (opts.borders && opts.borders.features.length) ? fillGaps(owner, land, W, H) : 0;
+    let dirty = gapsOnOpen > 0;
+
     // холст предпросмотра
     const canvas = document.createElement("canvas"); canvas.width = W; canvas.height = H;
     const cctx = canvas.getContext("2d");
@@ -144,7 +221,7 @@
     // элементы управления
     const sel = ui.querySelector("#brushState");
     sel.innerHTML = opts.states.map((s, i) => `<option value="${i + 1}">${s.name.replace(/</g, "&lt;")}</option>`).join("");
-    let current = 1, mode = "brush", radius = Number(ui.querySelector("#brushSize").value) || 6, dirty = false;
+    let current = 1, mode = "brush", radius = Number(ui.querySelector("#brushSize").value) || 6;
     sel.onchange = () => { current = Number(sel.value); };
     ui.querySelector("#brushSize").oninput = (e) => { radius = Number(e.target.value); ui.querySelector("#brushSizeOut").textContent = radius; };
     ui.querySelector("#brushSizeOut").textContent = radius;
@@ -158,7 +235,9 @@
     };
     ui.querySelectorAll("[data-mode]").forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
     setMode("brush");
-    msg(opts.states.length ? "Выберите государство и красьте сушу. Колесо мыши — масштаб, «Рука» — двигать карту." : "Сначала добавьте государство в «Управлении».");
+    msg(!opts.states.length ? "Сначала добавьте государство в «Управлении»."
+      : gapsOnOpen ? `Пустые места у берегов и внутри границ заполнены (${gapsOnOpen} клеток) — нажмите «Сохранить», чтобы они появились на карте.`
+      : "Выберите государство и красьте сушу. Колесо мыши — масштаб, «Рука» — двигать карту.");
 
     // рисование
     let drawing = false, last = null;
@@ -214,8 +293,9 @@
       btn.disabled = true; msg("Строю границы…");
       try {
         await new Promise((r) => setTimeout(r, 30));
+        fillGaps(owner, land, W, H);
         const geometries = {};
-        owners.forEach((id, i) => { geometries[id] = gridToGeometry(owner, i + 1, W, H); });
+        owners.forEach((id, i) => { geometries[id] = gridToGeometry(owner, land, i + 1, W, H); });
         msg("Сохраняю…");
         await opts.save({ grid: { w: W, h: H, owners, rle: rle(owner) }, geometries });
         dirty = false;
