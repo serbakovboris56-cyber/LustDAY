@@ -34,7 +34,7 @@
 ## Сборки Cloudflare
 
 - Основная сборка (ветка `main`): корневой каталог `/worker`, команда `npx wrangler deploy`.
-- Превью для веток и PR: команда `npx wrangler preview`; ей нужен блок `[previews]` в `worker/wrangler.toml`. Если сборка запускается из корня репозитория, `.wrangler/deploy/config.json` направляет wrangler на `worker/wrangler.toml`.
+- Превью для веток и PR: команда `npx wrangler preview` запускается из корня репозитория и берёт корневой `wrangler.toml` (только превью, без D1/KV). Основная сборка из `/worker` его не видит.
   Привязок D1/KV у превью нет, поэтому ветки не трогают живые данные игры.
 
 ## Запуск локально
