@@ -25,7 +25,7 @@ export default {
         const action = new URL(request.url).searchParams.get("action") || "public";
         if (action === "public") return reply(await publicPayload(env, ctx));
         if (action === "borders") return reply(await bordersPayload(env));
-        if (action === "ping") return reply({ ok: true, time: new Date().toISOString(), google: !!env.GOOGLE_SA_KEY });
+        if (action === "ping") return reply({ ok: true, time: new Date().toISOString(), google: !!env.GOOGLE_SA_KEY, admin: !!adminSecret(env) });
         return reply({ ok: false, error: "Неизвестное действие" }, 404);
       }
       if (request.method === "POST") {
@@ -70,6 +70,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
+    case "adminChangePassword": return adminChangePassword(env, await requireAdmin(env, body.token), body.password);
     case "adminReadInputs": await requireAdmin(env, body.token); return adminReadInputs(env, body.stateId);
     case "adminWriteInputs": await requireAdmin(env, body.token); return adminWriteInputs(env, ctx, body.stateId, body.inputs);
     case "adminCreateState": await requireAdmin(env, body.token); return adminCreateState(env, ctx, body.state);
@@ -90,16 +91,31 @@ const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replac
 const b64urlText = (s) => b64url(enc.encode(s));
 const fromB64url = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
 
-// Пароли: HMAC-SHA256 с солью и «перцем» — секретом, который хранится в KV и не попадает в базу.
+// Пароль админа из секрета. Пробелы и перевод строки по краям, попавшие при вставке в панель Cloudflare, отбрасываем.
+const adminSecret = (env) => String(env.ADMIN_PASSWORD || "").trim();
+
+// Внутренние ключи сервера живут в D1 (settings, ключи с «_»): KV согласован лишь «в итоге», и два
+// одновременных первых запроса из разных мест могли бы создать два разных ключа.
+const secretCache = {};
+async function serverSecret(env, name, legacyKvKey) {
+  if (!secretCache[name]) secretCache[name] = loadServerSecret(env, name, legacyKvKey).catch((e) => { delete secretCache[name]; throw e; });
+  return secretCache[name];
+}
+async function loadServerSecret(env, name, legacyKvKey) {
+  const key = "_" + name;
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first();
+  if (row && row.value) return row.value;
+  const fresh = (legacyKvKey && (await env.KV.get(legacyKvKey))) || toHex(crypto.getRandomValues(new Uint8Array(32)));
+  await env.DB.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").bind(key, fresh).run();
+  return (await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first()).value;
+}
+
+// Пароли: HMAC-SHA256 с солью и «перцем» — секретом, который не хранится рядом с хешами.
 // PBKDF2 с сотнями тысяч итераций не укладывается в лимит процессора бесплатного тарифа Workers (10 мс).
 let pepperCache = null;
 async function pepperKey(env) {
   if (pepperCache) return pepperCache;
-  let pepper = env.PEPPER || (await env.KV.get("pepper"));
-  if (!pepper) {
-    pepper = toHex(crypto.getRandomValues(new Uint8Array(32)));
-    await env.KV.put("pepper", pepper);
-  }
+  const pepper = env.PEPPER || (await serverSecret(env, "pepper", "pepper"));
   pepperCache = await crypto.subtle.importKey("raw", enc.encode(pepper), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return pepperCache;
 }
@@ -114,11 +130,12 @@ function timingSafeEqual(a, b) {
   return d === 0;
 }
 
+// Ключ подписи сессий: свой секрет сервера + пароль админа (смена пароля в секрете завершает все сессии).
+// Не зависит от того, задан ли ADMIN_PASSWORD, — игроки входят и без него.
 let hmacKeyCache = null;
 async function hmacKey(env) {
-  const seed = String(env.ADMIN_PASSWORD || "") + "|" + String(env.GOOGLE_SA_KEY || "") + "|vpi-token";
+  const seed = (await serverSecret(env, "token_secret")) + "|" + adminSecret(env) + "|vpi-token";
   if (hmacKeyCache && hmacKeyCache.seed === seed) return hmacKeyCache.key;
-  if (!env.ADMIN_PASSWORD) throw new HttpError("Сервер не настроен: не задан секрет ADMIN_PASSWORD.");
   const raw = await crypto.subtle.digest("SHA-256", enc.encode(seed));
   const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
   hmacKeyCache = { seed, key };
@@ -154,19 +171,22 @@ async function requireAdmin(env, token) {
  * ============================================================ */
 async function login(env, loginRaw, passwordRaw, request) {
   const loginName = String(loginRaw || "").trim().toLowerCase();
-  const password = String(passwordRaw || "");
+  // Пробелы по краям пароля — почти всегда случайность (автозамена на телефоне, копирование).
+  const password = String(passwordRaw || "").trim();
   if (!loginName || !password) return { ok: false, error: "Введите логин и пароль." };
 
+  const MAX_FAILS = 5;
   const ip = request.headers.get("CF-Connecting-IP") || "local";
   const key = `fail:${loginName}`, ipKey = `failip:${ip}`;
   const [fails, ipFails] = (await Promise.all([env.KV.get(key), env.KV.get(ipKey)])).map((x) => Number(x) || 0);
-  if (fails >= 5 || ipFails >= 20) return { ok: false, error: "Слишком много попыток. Подождите 10 минут." };
+  if (fails >= MAX_FAILS || ipFails >= 20) return { ok: false, error: "Слишком много неверных попыток. Подождите 10 минут и попробуйте снова." };
   const failed = async () => {
     await Promise.all([env.KV.put(key, String(fails + 1), { expirationTtl: 600 }), env.KV.put(ipKey, String(ipFails + 1), { expirationTtl: 600 })]);
-    return { ok: false, error: "Неверный логин или пароль." };
+    const left = MAX_FAILS - fails - 1;
+    return { ok: false, error: "Неверный логин или пароль." + (left <= 2 ? ` Осталось попыток: ${left}.` : "") };
   };
   const passed = async (data) => {
-    await env.KV.delete(key);
+    await Promise.all([env.KV.delete(key), ipFails ? env.KV.delete(ipKey) : null]);
     return { ok: true, token: await makeToken(env, data), role: data.role, stateId: data.stateId || null };
   };
 
@@ -175,8 +195,9 @@ async function login(env, loginRaw, passwordRaw, request) {
   if (admin) {
     return timingSafeEqual(await hashPassword(env, password, admin.salt), admin.pass_hash) ? passed({ role: "admin", login: loginName }) : failed();
   }
-  if (loginName === "admin" && env.ADMIN_PASSWORD) {
-    const a = await hashPassword(env, password, "bootstrap"), b = await hashPassword(env, String(env.ADMIN_PASSWORD), "bootstrap");
+  if (loginName === "admin") {
+    if (!adminSecret(env)) return { ok: false, error: "На сервере не задан пароль администратора: добавьте секрет ADMIN_PASSWORD в Cloudflare (Workers → lustday → Settings → Variables and Secrets, тип Secret)." };
+    const a = await hashPassword(env, password, "bootstrap"), b = await hashPassword(env, adminSecret(env), "bootstrap");
     return timingSafeEqual(a, b) ? passed({ role: "admin", login: "admin" }) : failed();
   }
 
@@ -315,22 +336,40 @@ async function registry(env) {
   return results.map((r, i) => ({ ...r, color: r.color || COLORS[i % COLORS.length], active: !!r.active }));
 }
 
+async function collectState(env, r, cfg) {
+  const base = { id: r.id, name: r.name, ruler: r.ruler, color: r.color, capital: r.capital, pantheon: r.pantheon };
+  if (!r.sheet_id) return { ...base, public: {}, error: "нет ссылки на таблицу" };
+  try {
+    const d = parseLedger(await readSheetValues(env, r.sheet_id), cfg.startYear);
+    if (!base.name) base.name = (d.sheetName && !d.sheetName.startsWith("[") ? d.sheetName : "") || r.id;
+    return { ...base, public: d.public, ledger: d.ledger };
+  } catch (e) {
+    return { ...base, public: {}, error: e.message };
+  }
+}
+const snapTurn = (states) => states.reduce((m, s) => Math.max(m, (s.ledger && s.ledger.turn) || 0), 0);
+
 async function refreshSnapshot(env) {
   const [regs, cfg] = await Promise.all([registry(env), settings(env)]);
-  let turn = 0;
-  const states = await Promise.all(regs.filter((r) => r.active).map(async (r) => {
-    const base = { id: r.id, name: r.name, ruler: r.ruler, color: r.color, capital: r.capital, pantheon: r.pantheon };
-    if (!r.sheet_id) return { ...base, public: {}, error: "нет ссылки на таблицу" };
-    try {
-      const d = parseLedger(await readSheetValues(env, r.sheet_id), cfg.startYear);
-      if (!base.name) base.name = (d.sheetName && !d.sheetName.startsWith("[") ? d.sheetName : "") || r.id;
-      turn = Math.max(turn, d.ledger.turn);
-      return { ...base, public: d.public, ledger: d.ledger };
-    } catch (e) {
-      return { ...base, public: {}, error: e.message };
-    }
-  }));
-  const snap = { turn, season: cfg.season, updated: new Date().toISOString(), states };
+  const states = await Promise.all(regs.filter((r) => r.active).map((r) => collectState(env, r, cfg)));
+  const snap = { turn: snapTurn(states), season: cfg.season, updated: new Date().toISOString(), states };
+  await env.KV.put("snapshot", JSON.stringify(snap));
+  return snap;
+}
+
+// После правки одной таблицы перечитываем только её, остальные берём из снимка.
+async function refreshOneState(env, stateId) {
+  const text = await env.KV.get("snapshot");
+  if (!text) return refreshSnapshot(env);
+  const [regs, cfg] = await Promise.all([registry(env), settings(env)]);
+  const r = regs.find((x) => x.id === stateId);
+  const snap = JSON.parse(text);
+  if (!r || !r.active) return snap;
+  const fresh = await collectState(env, r, cfg);
+  const i = snap.states.findIndex((x) => x.id === stateId);
+  if (i >= 0) snap.states[i] = fresh; else snap.states.push(fresh);
+  snap.turn = snapTurn(snap.states);
+  snap.season = cfg.season;
   await env.KV.put("snapshot", JSON.stringify(snap));
   return snap;
 }
@@ -418,11 +457,22 @@ async function adminDeleteState(env, stateId) {
 }
 
 async function adminSetPassword(env, stateId, pass) {
-  pass = String(pass || "");
+  pass = String(pass || "").trim();
   if (pass.length < 6) return { ok: false, error: "Пароль — не короче 6 символов." };
   const salt = newSalt();
   const r = await env.DB.prepare("UPDATE states SET pass_hash = ?, salt = ? WHERE id = ?").bind(await hashPassword(env, pass, salt), salt, stateId).run();
   if (!r.meta.changes) return { ok: false, error: "Государство не найдено." };
+  return { ok: true };
+}
+
+// Свой пароль администратора: строка в admins заменяет секрет ADMIN_PASSWORD для этого логина,
+// поэтому вход больше не зависит от переменных воркера.
+async function adminChangePassword(env, t, pass) {
+  pass = String(pass || "").trim();
+  if (pass.length < 8) return { ok: false, error: "Пароль администратора — не короче 8 символов." };
+  const salt = newSalt();
+  await env.DB.prepare("INSERT INTO admins (login, pass_hash, salt) VALUES (?1, ?2, ?3) ON CONFLICT(login) DO UPDATE SET pass_hash=?2, salt=?3")
+    .bind(t.login || "admin", await hashPassword(env, pass, salt), salt).run();
   return { ok: true };
 }
 
@@ -540,7 +590,7 @@ async function adminWriteInputs(env, ctx, stateId, inp) {
   if (!data.length) return { ok: false, error: "Нечего сохранять." };
   await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
   // пересобираем цифры этого государства, чтобы сайт сразу показал новое
-  const snap = await refreshSnapshot(env);
+  const snap = await refreshOneState(env, r.id);
   const s = snap.states.find((x) => x.id === r.id);
   return { ok: true, ledger: s && s.ledger, public: s && s.public, error: s && s.error ? "Записано, но чтение не удалось: " + s.error : undefined };
 }
