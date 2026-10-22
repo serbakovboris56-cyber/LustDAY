@@ -19,7 +19,11 @@
     <h1>Хроника государств</h1>
     <p class="bar__sub" id="turnInfo">Загрузка…</p>
   </div>
-  <button class="btn" id="loginBtn" type="button">Войти</button>
+  <div class="bar__actions">
+    <span class="bar__who" id="whoami"></span>
+    <button class="btn btn--ghost" id="adminBtn" type="button" hidden>Управление</button>
+    <button class="btn" id="loginBtn" type="button">Войти</button>
+  </div>
 </header>
 
 <main class="stage">
@@ -39,7 +43,7 @@
 <dialog class="login" id="loginDialog">
   <form method="dialog" id="loginForm" class="login__form">
     <h2>Вход правителя</h2>
-    <p class="login__hint">Логин и пароль выдаёт администратор игры.</p>
+    <p class="login__hint" id="loginHint">Логин и пароль выдаёт администратор игры.</p>
     <label>Логин <input name="login" autocomplete="username" required></label>
     <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
     <p class="login__error" id="loginError" role="alert"></p>
@@ -50,6 +54,31 @@
   </form>
 </dialog>
 
+<dialog class="login admin" id="adminDialog">
+  <div class="login__form">
+    <div class="admin__head">
+      <h2>Управление</h2>
+      <button class="panel__close" id="adminClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <p class="login__hint">Данные сайта берутся из таблиц государств и обновляются сами раз в 10 минут. После хода можно обновить сразу.</p>
+    <div><button class="btn" id="adminRefresh" type="button">Обновить данные из таблиц</button></div>
+    <p class="login__error" id="adminMsg" role="status"></p>
+    <div id="adminList"></div>
+    <form id="adminAdd" class="admin__add">
+      <h3>Добавить или изменить государство</h3>
+      <label>ID латиницей <input name="id" required pattern="[A-Za-z0-9_\-]{2,20}" placeholder="arn"></label>
+      <label>Название <input name="name" required placeholder="Арнорское королевство"></label>
+      <label>Правитель <input name="ruler" placeholder="Король Эдрик II"></label>
+      <label>Столица <input name="capital"></label>
+      <label>Цвет на карте <input name="color" type="color" value="#C8463A"></label>
+      <label>Логин игрока <input name="login" autocomplete="off"></label>
+      <label class="admin__wide">Ссылка на таблицу государства <input name="link" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+      <div class="admin__wide"><button class="btn" type="submit">Сохранить государство</button></div>
+    </form>
+  </div>
+</dialog>
+
+<script src="assets/config.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
 <script src="assets/app.js"></script>
 </body>

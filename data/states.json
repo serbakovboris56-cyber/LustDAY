@@ -1,399 +1,500 @@
 {
-  "demo": true,
-  "turn": 1,
-  "season": "Средневековье",
-  "updated": "2026-10-22",
-  "states": [
-    {
-      "id": "arn",
-      "name": "Арнорское королевство",
-      "ruler": "Король Эдрик II",
-      "color": "#C8463A",
-      "capital": "Арнбург",
-      "pantheon": "Пресветлый Сонм",
-      "public": {
-        "population": 18760,
-        "regions": 3,
-        "army": 400
-      },
-      "ledger": {
-        "estates": [
-          {
-            "key": "peasants",
-            "name": "Крестьяне",
-            "count": 14000,
-            "yield": "30 800 еды"
-          },
-          {
-            "key": "artisans",
-            "name": "Ремесленники",
-            "count": 3000,
-            "yield": "300 ремесла"
-          },
-          {
-            "key": "merchants",
-            "name": "Торговцы",
-            "count": 900,
-            "yield": "900 монет"
-          },
-          {
-            "key": "priests",
-            "name": "Священники",
-            "count": 700,
-            "yield": "7 клирики"
-          },
-          {
-            "key": "feudals",
-            "name": "Феодалы",
-            "count": 160,
-            "yield": "80 спец. + 320 сброда"
-          }
-        ],
-        "pools": {
-          "treasury": {
-            "stock": 2640,
-            "income": 1100
-          },
-          "warehouse": {
-            "stock": 610,
-            "income": 300
-          },
-          "fund": {
-            "stock": 420,
-            "pct": 30
-          }
-        },
-        "food": {
-          "stock": 4100,
-          "production": 30800,
-          "consumption": 28300
-        },
-        "clerics": {
-          "stock": 12,
-          "income": 7
-        },
-        "loyalty": [
-          {
-            "name": "Крестьяне",
-            "value": 62
-          },
-          {
-            "name": "Ремесленники",
-            "value": 70
-          },
-          {
-            "name": "Торговцы",
-            "value": 58
-          },
-          {
-            "name": "Священники",
-            "value": 81
-          },
-          {
-            "name": "Феодалы",
-            "value": 74
-          }
-        ],
-        "resources": [
-          "Золото",
-          "Соль",
-          "Камни"
-        ],
-        "army": {
-          "specialists": 80,
-          "rabble": 320
-        },
-        "regions": [
-          {
-            "name": "Арнбург (столица)",
-            "population": 9800,
-            "loyalty": 78,
-            "buildings": [
-              "Ратуша",
-              "Храм Сонма",
-              "Рынок",
-              "Казармы"
-            ]
-          },
-          {
-            "name": "Долина Ведры",
-            "population": 5600,
-            "loyalty": 64,
-            "buildings": [
-              "Мельница",
-              "Солеварня"
-            ]
-          },
-          {
-            "name": "Каменный кряж",
-            "population": 3360,
-            "loyalty": 55,
-            "buildings": [
-              "Каменоломня"
-            ]
-          }
-        ],
-        "crises": []
-      }
+ "demo": true,
+ "turn": 3,
+ "season": "Средневековье",
+ "updated": "2026-10-22T16:00:00Z",
+ "states": [
+  {
+   "id": "arn",
+   "name": "Арнорское королевство",
+   "ruler": "Король Эдрик II",
+   "color": "#C8463A",
+   "capital": "Арнбург",
+   "pantheon": "Пресветлый Сонм",
+   "public": {
+    "population": 18760,
+    "regions": 3,
+    "army": 300
+   },
+   "ledger": {
+    "turn": 3,
+    "year": 1203,
+    "population": 18760,
+    "popGrowth": 188,
+    "popPct": 1.0,
+    "estates": [
+     {
+      "name": "Крестьяне",
+      "count": 14000,
+      "loyalty": 62
+     },
+     {
+      "name": "Ремесленники",
+      "count": 3000,
+      "loyalty": 70
+     },
+     {
+      "name": "Торговцы",
+      "count": 900,
+      "loyalty": 58
+     },
+     {
+      "name": "Священники",
+      "count": 700,
+      "loyalty": 81
+     },
+     {
+      "name": "Феодалы",
+      "count": 160,
+      "loyalty": 74
+     }
+    ],
+    "food": {
+     "production": 30800,
+     "consumption": 19080,
+     "surplus": 11720
     },
-    {
-      "id": "vel",
-      "name": "Вельмарская теократия",
-      "ruler": "Верховная жрица Ильвара",
-      "color": "#3D7FCF",
-      "capital": "Вельмар",
-      "pantheon": "Храм Тихой Луны",
-      "public": {
-        "population": 14230,
-        "regions": 2,
-        "army": 250
-      },
-      "ledger": {
-        "estates": [
-          {
-            "key": "peasants",
-            "name": "Крестьяне",
-            "count": 10200,
-            "yield": "20 400 еды"
-          },
-          {
-            "key": "artisans",
-            "name": "Ремесленники",
-            "count": 1800,
-            "yield": "180 ремесла"
-          },
-          {
-            "key": "merchants",
-            "name": "Торговцы",
-            "count": 500,
-            "yield": "500 монет"
-          },
-          {
-            "key": "priests",
-            "name": "Священники",
-            "count": 1630,
-            "yield": "16 клирики (+1 благовония)"
-          },
-          {
-            "key": "feudals",
-            "name": "Феодалы",
-            "count": 100,
-            "yield": "50 спец. + 200 сброда"
-          }
-        ],
-        "pools": {
-          "treasury": {
-            "stock": 1180,
-            "income": 500
-          },
-          "warehouse": {
-            "stock": 340,
-            "income": 180
-          },
-          "fund": {
-            "stock": 210,
-            "pct": 30
-          }
-        },
-        "food": {
-          "stock": 900,
-          "production": 20400,
-          "consumption": 21445
-        },
-        "clerics": {
-          "stock": 41,
-          "income": 17
-        },
-        "loyalty": [
-          {
-            "name": "Крестьяне",
-            "value": 48
-          },
-          {
-            "name": "Ремесленники",
-            "value": 57
-          },
-          {
-            "name": "Торговцы",
-            "value": 51
-          },
-          {
-            "name": "Священники",
-            "value": 92
-          },
-          {
-            "name": "Феодалы",
-            "value": 60
-          }
-        ],
-        "resources": [
-          "Благовония",
-          "Железо"
-        ],
-        "army": {
-          "specialists": 50,
-          "rabble": 200
-        },
-        "regions": [
-          {
-            "name": "Вельмар (столица)",
-            "population": 9100,
-            "loyalty": 71,
-            "buildings": [
-              "Собор Луны",
-              "Обитель",
-              "Скрипторий"
-            ]
-          },
-          {
-            "name": "Сизые топи",
-            "population": 5130,
-            "loyalty": 49,
-            "buildings": [
-              "Рудник"
-            ]
-          }
-        ],
-        "crises": [
-          "Голод: еды не хватает на 1 045 в год"
-        ]
-      }
+    "craft": {
+     "income": 300
     },
-    {
-      "id": "sar",
-      "name": "Саррадский эмират",
-      "ruler": "Эмир Хасир ибн Тарек",
-      "color": "#3E9E62",
-      "capital": "Сарра",
-      "pantheon": "Огни Пустыни",
-      "public": {
-        "population": 21400,
-        "regions": 4,
-        "army": 600
-      },
-      "ledger": {
-        "estates": [
-          {
-            "key": "peasants",
-            "name": "Крестьяне",
-            "count": 16300,
-            "yield": "32 600 еды"
-          },
-          {
-            "key": "artisans",
-            "name": "Ремесленники",
-            "count": 2600,
-            "yield": "260 ремесла"
-          },
-          {
-            "key": "merchants",
-            "name": "Торговцы",
-            "count": 1400,
-            "yield": "1 610 монет (+15% шёлк)"
-          },
-          {
-            "key": "priests",
-            "name": "Священники",
-            "count": 860,
-            "yield": "8 клирики"
-          },
-          {
-            "key": "feudals",
-            "name": "Феодалы",
-            "count": 240,
-            "yield": "120 спец. + 480 сброда"
-          }
-        ],
-        "pools": {
-          "treasury": {
-            "stock": 6930,
-            "income": 1610
-          },
-          "warehouse": {
-            "stock": 450,
-            "income": 260
-          },
-          "fund": {
-            "stock": 1290,
-            "pct": 30
-          }
-        },
-        "food": {
-          "stock": 2300,
-          "production": 32600,
-          "consumption": 32340
-        },
-        "clerics": {
-          "stock": 6,
-          "income": 8
-        },
-        "loyalty": [
-          {
-            "name": "Крестьяне",
-            "value": 55
-          },
-          {
-            "name": "Ремесленники",
-            "value": 61
-          },
-          {
-            "name": "Торговцы",
-            "value": 88
-          },
-          {
-            "name": "Священники",
-            "value": 63
-          },
-          {
-            "name": "Феодалы",
-            "value": 69
-          }
-        ],
-        "resources": [
-          "Шёлк",
-          "Уголь"
-        ],
-        "army": {
-          "specialists": 120,
-          "rabble": 480
-        },
-        "regions": [
-          {
-            "name": "Сарра (столица)",
-            "population": 8800,
-            "loyalty": 80,
-            "buildings": [
-              "Дворец эмира",
-              "Большой базар",
-              "Караван-сарай"
-            ]
-          },
-          {
-            "name": "Оазис Нуур",
-            "population": 5200,
-            "loyalty": 66,
-            "buildings": [
-              "Колодцы",
-              "Сады"
-            ]
-          },
-          {
-            "name": "Барханный край",
-            "population": 4100,
-            "loyalty": 52,
-            "buildings": []
-          },
-          {
-            "name": "Медный берег",
-            "population": 3300,
-            "loyalty": 58,
-            "buildings": [
-              "Порт"
-            ]
-          }
-        ],
-        "crises": []
-      }
-    }
-  ]
+    "coins": {
+     "income": 1100,
+     "upkeep": 300,
+     "net": 800
+    },
+    "pools": {
+     "treasury": {
+      "stock": 2640,
+      "delta": 470
+     },
+     "warehouse": {
+      "stock": 610,
+      "delta": 210
+     },
+     "fund": {
+      "craft": 140,
+      "coins": 420,
+      "pct": 30
+     }
+    },
+    "unity": 50.8,
+    "clerics": {
+     "stock": 12,
+     "income": 7.0,
+     "end": 19.0,
+     "threat": "СТАБИЛЬНО"
+    },
+    "levy": {
+     "specialists": 80,
+     "rabble": 320,
+     "inRanks": 300
+    },
+    "armyPower": 520,
+    "resources": [
+     {
+      "name": "Золото",
+      "count": 1
+     },
+     {
+      "name": "Железо",
+      "count": 0
+     },
+     {
+      "name": "Драг. камни",
+      "count": 1
+     },
+     {
+      "name": "Уголь",
+      "count": 0
+     },
+     {
+      "name": "Соль",
+      "count": 1
+     },
+     {
+      "name": "Благовония",
+      "count": 0
+     },
+     {
+      "name": "Шёлк",
+      "count": 0
+     }
+    ],
+    "crises": [],
+    "regions": [
+     {
+      "name": "Арнбург",
+      "type": "Столица",
+      "population": 9800,
+      "loyalty": 74,
+      "food": 15400,
+      "craft": 180,
+      "trade": 520,
+      "buildings": [
+       "Ратуша",
+       "Храм",
+       "Рынок",
+       "Казармы"
+      ]
+     },
+     {
+      "name": "Долина Ведры",
+      "type": "Город",
+      "population": 5600,
+      "loyalty": 64,
+      "food": 9900,
+      "craft": 80,
+      "trade": 250,
+      "buildings": [
+       "Мельница",
+       "Ферма"
+      ]
+     },
+     {
+      "name": "Каменный кряж",
+      "type": "Крепость",
+      "population": 3360,
+      "loyalty": 57,
+      "food": 5500,
+      "craft": 40,
+      "trade": 130,
+      "buildings": [
+       "Стены"
+      ]
+     }
+    ],
+    "modifiers": [
+     {
+      "name": "Королевский тракт",
+      "effects": "Доход +10%",
+      "term": "██████░░░░ 60% +20"
+     }
+    ]
+   }
+  },
+  {
+   "id": "vel",
+   "name": "Вельмарская теократия",
+   "ruler": "Верховная жрица Ильвара",
+   "color": "#3D7FCF",
+   "capital": "Вельмар",
+   "pantheon": "Храм Тихой Луны",
+   "public": {
+    "population": 14230,
+    "regions": 2,
+    "army": 180
+   },
+   "ledger": {
+    "turn": 3,
+    "year": 1203,
+    "population": 14230,
+    "popGrowth": 142,
+    "popPct": 1.0,
+    "estates": [
+     {
+      "name": "Крестьяне",
+      "count": 10200,
+      "loyalty": 48
+     },
+     {
+      "name": "Ремесленники",
+      "count": 1800,
+      "loyalty": 57
+     },
+     {
+      "name": "Торговцы",
+      "count": 500,
+      "loyalty": 51
+     },
+     {
+      "name": "Священники",
+      "count": 1630,
+      "loyalty": 92
+     },
+     {
+      "name": "Феодалы",
+      "count": 100,
+      "loyalty": 60
+     }
+    ],
+    "food": {
+     "production": 20400,
+     "consumption": 14430,
+     "surplus": 5970
+    },
+    "craft": {
+     "income": 180
+    },
+    "coins": {
+     "income": 500,
+     "upkeep": 180,
+     "net": 320
+    },
+    "pools": {
+     "treasury": {
+      "stock": 1180,
+      "delta": 170
+     },
+     "warehouse": {
+      "stock": 340,
+      "delta": 126
+     },
+     "fund": {
+      "craft": 60,
+      "coins": 210,
+      "pct": 30
+     }
+    },
+    "unity": 51.8,
+    "clerics": {
+     "stock": 41,
+     "income": 18.05,
+     "end": 59.05,
+     "threat": "СТАБИЛЬНО"
+    },
+    "levy": {
+     "specialists": 50,
+     "rabble": 200,
+     "inRanks": 180
+    },
+    "armyPower": 310,
+    "resources": [
+     {
+      "name": "Золото",
+      "count": 0
+     },
+     {
+      "name": "Железо",
+      "count": 1
+     },
+     {
+      "name": "Драг. камни",
+      "count": 0
+     },
+     {
+      "name": "Уголь",
+      "count": 0
+     },
+     {
+      "name": "Соль",
+      "count": 0
+     },
+     {
+      "name": "Благовония",
+      "count": 2
+     },
+     {
+      "name": "Шёлк",
+      "count": 0
+     }
+    ],
+    "crises": [
+     "Поветрие"
+    ],
+    "regions": [
+     {
+      "name": "Вельмар",
+      "type": "Столица",
+      "population": 9100,
+      "loyalty": 72,
+      "food": 13000,
+      "craft": 120,
+      "trade": 330,
+      "buildings": [
+       "Собор",
+       "Монастырь",
+       "Скрипторий магии"
+      ]
+     },
+     {
+      "name": "Сизые топи",
+      "type": "Город",
+      "population": 5130,
+      "loyalty": 52,
+      "food": 7400,
+      "craft": 60,
+      "trade": 170,
+      "buildings": []
+     }
+    ],
+    "modifiers": [
+     {
+      "name": "Неурожай",
+      "effects": "Еда −20%",
+      "term": "осталось ходов: 2"
+     }
+    ]
+   }
+  },
+  {
+   "id": "sar",
+   "name": "Саррадский эмират",
+   "ruler": "Эмир Хасир ибн Тарек",
+   "color": "#3E9E62",
+   "capital": "Сарра",
+   "pantheon": "Огни Пустыни",
+   "public": {
+    "population": 21400,
+    "regions": 4,
+    "army": 420
+   },
+   "ledger": {
+    "turn": 3,
+    "year": 1203,
+    "population": 21400,
+    "popGrowth": 214,
+    "popPct": 1.0,
+    "estates": [
+     {
+      "name": "Крестьяне",
+      "count": 16300,
+      "loyalty": 55
+     },
+     {
+      "name": "Ремесленники",
+      "count": 2600,
+      "loyalty": 61
+     },
+     {
+      "name": "Торговцы",
+      "count": 1400,
+      "loyalty": 88
+     },
+     {
+      "name": "Священники",
+      "count": 860,
+      "loyalty": 63
+     },
+     {
+      "name": "Феодалы",
+      "count": 240,
+      "loyalty": 69
+     }
+    ],
+    "food": {
+     "production": 32600,
+     "consumption": 21880,
+     "surplus": 10720
+    },
+    "craft": {
+     "income": 299
+    },
+    "coins": {
+     "income": 1610,
+     "upkeep": 420,
+     "net": 1190
+    },
+    "pools": {
+     "treasury": {
+      "stock": 6930,
+      "delta": 707
+     },
+     "warehouse": {
+      "stock": 450,
+      "delta": 209
+     },
+     "fund": {
+      "craft": 110,
+      "coins": 1290,
+      "pct": 30
+     }
+    },
+    "unity": 50.9,
+    "clerics": {
+     "stock": 6,
+     "income": 8.6,
+     "end": 14.6,
+     "threat": "СТАБИЛЬНО"
+    },
+    "levy": {
+     "specialists": 120,
+     "rabble": 480,
+     "inRanks": 420
+    },
+    "armyPower": 760,
+    "resources": [
+     {
+      "name": "Золото",
+      "count": 0
+     },
+     {
+      "name": "Железо",
+      "count": 0
+     },
+     {
+      "name": "Драг. камни",
+      "count": 0
+     },
+     {
+      "name": "Уголь",
+      "count": 1
+     },
+     {
+      "name": "Соль",
+      "count": 0
+     },
+     {
+      "name": "Благовония",
+      "count": 0
+     },
+     {
+      "name": "Шёлк",
+      "count": 1
+     }
+    ],
+    "crises": [],
+    "regions": [
+     {
+      "name": "Сарра",
+      "type": "Столица",
+      "population": 8800,
+      "loyalty": 78,
+      "food": 13100,
+      "craft": 110,
+      "trade": 700,
+      "buildings": [
+       "Дворец",
+       "Большой базар",
+       "Караван-сарай"
+      ]
+     },
+     {
+      "name": "Оазис Нуур",
+      "type": "Город",
+      "population": 5200,
+      "loyalty": 64,
+      "food": 8200,
+      "craft": 70,
+      "trade": 380,
+      "buildings": [
+       "Сады"
+      ]
+     },
+     {
+      "name": "Барханный край",
+      "type": "Деревня",
+      "population": 4100,
+      "loyalty": 54,
+      "food": 6300,
+      "craft": 40,
+      "trade": 190,
+      "buildings": []
+     },
+     {
+      "name": "Медный берег",
+      "type": "Порт",
+      "population": 3300,
+      "loyalty": 59,
+      "food": 5000,
+      "craft": 40,
+      "trade": 340,
+      "buildings": [
+       "Порт"
+      ]
+     }
+    ],
+    "modifiers": []
+   }
+  }
+ ]
 }
