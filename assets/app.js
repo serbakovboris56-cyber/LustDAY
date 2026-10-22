@@ -148,6 +148,7 @@
   }
   function addBorders(geo) {
     bordersGeo = geo || bordersGeo;
+    if (!vector) return;
     if (bordersLayer) bordersLayer.remove();
     labelsLayer.clearLayers();
     state.layers.clear();
@@ -264,6 +265,9 @@
         </div>`;
       return;
     }
+    if (state.session.role === "admin" && !DEMO) {
+      slot.insertAdjacentHTML("beforebegin", `<p class="admin__edit"><button type="button" class="btn btn--ghost" data-edit-stats="${esc(s.id)}">Править цифры</button></p>`);
+    }
     const cached = state.ledgers.get(s.id);
     if (cached) { slot.innerHTML = ledgerHTML(cached); return; }
     slot.innerHTML = `<p class="loading">Загружаю статистику…</p>`;
@@ -379,6 +383,8 @@
   $("#panelClose").addEventListener("click", closePanel);
   $("#panelBody").addEventListener("click", (e) => {
     if (e.target.closest('[data-action="login"]')) openLogin();
+    const ed = e.target.closest("[data-edit-stats]");
+    if (ed) openStats(ed.dataset.editStats, null);
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.selected && !document.querySelector("dialog[open]")) closePanel();
@@ -436,7 +442,7 @@
     m.classList.toggle("is-error", !!isError);
   }
   async function openAdmin(keepMsg) {
-    if (!$("#adminDialog").open) $("#adminDialog").showModal();
+    if (!$("#adminDialog").open) { $("#adminDialog").showModal(); loadSettings(); }
     if (keepMsg !== true) adminMsg("");
     $("#adminList").innerHTML = `<p class="loading">Загружаю список…</p>`;
     try {
@@ -455,6 +461,7 @@
     $("#adminAdd").color.value = PALETTE.find((c) => !used.has(c)) || PALETTE[state.data.states.length % PALETTE.length];
   }
   function renderAdminList(rows) {
+    state.adminRows = rows;
     $("#adminList").innerHTML = rows.length ? `
       <table class="admin-table">
         <thead><tr><th>Государство</th><th>Логин</th><th>Таблица</th><th>Новый пароль</th></tr></thead>
@@ -463,13 +470,18 @@
             <tr>
               <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name || r.id)}<div class="muted">${esc(r.id)}${r.active ? "" : ", скрыто"}</div></td>
               <td>${esc(r.login || "—")}<div class="muted">${r.hasPassword ? "пароль задан" : "пароля нет"}</div></td>
-              <td class="${r.error ? "balance--deficit" : "balance--surplus"}">${esc(r.error || (r.linked ? "данные получены" : "нет ссылки"))}</td>
+              <td class="${r.error ? "balance--deficit" : "balance--surplus"}">${esc(r.error || (r.linked ? "данные получены" : "нет ссылки"))}
+                ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}</td>
               <td><form class="pw-form" data-id="${esc(r.id)}"><input name="pw" type="text" minlength="6" placeholder="от 6 символов" aria-label="Новый пароль для ${esc(r.name)}" required><button class="btn btn--ghost" type="submit">Задать</button></form></td>
             </tr>`).join("")}
         </tbody>
       </table>` : `<p class="muted">Государств пока нет. Добавьте первое формой ниже.</p>`;
   }
   $("#adminBtn").addEventListener("click", () => openAdmin());
+  $("#adminList").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-stats]");
+    if (b) { const row = state.adminRows && state.adminRows.find((r) => r.id === b.dataset.stats); openStats(b.dataset.stats, row && row.sheetId); }
+  });
   $("#adminClose").addEventListener("click", () => $("#adminDialog").close());
   $("#adminList").addEventListener("submit", async (e) => {
     const form = e.target.closest(".pw-form");
@@ -495,17 +507,157 @@
     } catch (err) { adminMsg(err.message, true); }
     finally { b.disabled = false; }
   });
+  $("#adminAdd").addEventListener("change", (e) => {
+    if (e.target.name === "source") $("#linkField").hidden = e.target.value !== "link";
+  });
   $("#adminAdd").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const st = Object.fromEntries(fd.entries());
+    const source = st.source; delete st.source;
     st.active = true;
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
     try {
-      await api.admin("adminSaveState", { state: st });
+      if (source === "create") {
+        delete st.link;
+        adminMsg("Копирую шаблон таблицы…");
+        const res = await api.admin("adminCreateState", { state: st });
+        adminMsg(`Государство «${st.name}» создано, таблица готова. Задайте игроку пароль.`);
+        if (res.sheetUrl) window.open(res.sheetUrl, "_blank", "noopener");
+      } else {
+        await api.admin("adminSaveState", { state: st });
+        adminMsg(`Государство «${st.name}» сохранено. Задайте пароль и нажмите «Обновить данные из таблиц».`);
+      }
       e.target.reset();
-      adminMsg(`Государство «${st.name}» сохранено. Задайте пароль и нажмите «Обновить данные из таблиц».`);
+      $("#linkField").hidden = true;
+      await reloadPublic();
       openAdmin(true);
     } catch (err) { adminMsg(err.message, true); }
+    finally { btn.disabled = false; }
+  });
+
+  // настройки сервера
+  async function loadSettings() {
+    if (DEMO) { $("#saInfo").textContent = "Демо-режим: настройки не сохраняются."; return; }
+    try {
+      const info = await api.admin("adminInfo");
+      const f = $("#adminSettings");
+      f.template.value = info.settings.template ? `https://docs.google.com/spreadsheets/d/${info.settings.template}/edit` : "";
+      f.admin_email.value = info.settings.admin_email || "";
+      f.season.value = info.settings.season || "";
+      f.start_year.value = info.settings.start_year || "1200";
+      $("#saInfo").textContent = info.serviceAccount ? `Робот Google: ${info.serviceAccount}. Откройте ему шаблон и таблицы государств с правом «Редактор».` : "Ключ Google не задан.";
+    } catch (err) { $("#saInfo").textContent = err.message; }
+  }
+  $("#adminSettings").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api.admin("adminSaveSettings", { settings: Object.fromEntries(new FormData(e.target).entries()) });
+      adminMsg("Настройки сохранены.");
+    } catch (err) { adminMsg(err.message, true); }
+  });
+
+  async function reloadPublic() {
+    const data = await api.publicData();
+    applyPublic(data);
+    addBorders();
+  }
+
+  /* ---------------- правка статистики ---------------- */
+  const EST = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
+  let statsState = null;
+  async function openStats(stateId, sheetId) {
+    statsState = stateId;
+    const s = state.byId.get(stateId);
+    $("#statsTitle").textContent = "Статистика: " + (s ? s.name : stateId);
+    $("#statsMsg").textContent = "";
+    $("#statsBody").innerHTML = `<p class="loading">Читаю таблицу…</p>`;
+    const link = $("#statsSheetLink");
+    link.hidden = !sheetId; if (sheetId) link.href = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+    if (!$("#statsDialog").open) $("#statsDialog").showModal();
+    try {
+      if (DEMO) throw new Error("В демо-режиме таблицы не подключены.");
+      const { inputs } = await api.admin("adminReadInputs", { stateId });
+      $("#statsBody").innerHTML = statsFormHTML(inputs);
+    } catch (err) { $("#statsBody").innerHTML = `<div class="crisis">${esc(err.message)}</div>`; }
+  }
+  function regionRowHTML(g) {
+    g = g || { name: "", type: "Город", estates: [0, 0, 0, 0, 0], loyalty: [50, 50, 50, 50, 50], buildings: "" };
+    return `<tr>
+      <td><input name="rname" value="${esc(g.name)}" placeholder="Название" aria-label="Регион"></td>
+      <td><input name="rtype" value="${esc(g.type)}" aria-label="Тип"></td>
+      ${g.estates.map((v, k) => `<td><input name="re${k}" type="number" min="0" value="${v}" aria-label="${EST[k]}"></td>`).join("")}
+      ${g.loyalty.map((v, k) => `<td><input name="rl${k}" type="number" min="0" max="100" value="${v}" aria-label="Лояльность: ${EST[k]}"></td>`).join("")}
+      <td><input name="rb" value="${esc(g.buildings)}" aria-label="Постройки"></td>
+      <td><button type="button" class="linklike" data-del-region aria-label="Удалить регион">×</button></td>
+    </tr>`;
+  }
+  function statsFormHTML(i) {
+    return `
+      <label class="stats__name">Название государства <input name="sname" value="${esc(i.name)}"></label>
+      <section class="section"><h3>Регионы</h3>
+        <div class="stats__scroll"><table class="stats-table">
+          <thead><tr><th>Регион</th><th>Тип</th>${EST.map((e) => `<th title="${e}">${e.slice(0, 5)}.</th>`).join("")}${EST.map((e) => `<th title="Лояльность: ${e}">Лоял. ${e.slice(0, 3)}.</th>`).join("")}<th>Постройки</th><th></th></tr></thead>
+          <tbody id="regionRows">${i.regions.map(regionRowHTML).join("")}</tbody>
+        </table></div>
+        <button type="button" class="btn btn--ghost" id="addRegion">Добавить регион</button>
+      </section>
+      <section class="section"><h3>Ресурсы (число источников)</h3>
+        <div class="stats__grid">${i.resources.map((r, k) => `<label>${esc(r.name)} <input name="res${k}" type="number" min="0" max="99" value="${r.count}"></label>`).join("")}</div>
+      </section>
+      <section class="section"><h3>Расходы этого хода по вердикту</h3>
+        <div class="stats__grid">
+          <label>Со склада (ремесло) <input name="ccraft" type="number" min="0" value="${i.costs.craft}"></label>
+          <label>Из казны (монеты) <input name="ccoins" type="number" min="0" value="${i.costs.coins}"></label>
+          <label>Клирики потрачено <input name="ccleric" type="number" min="0" step="0.01" value="${i.costs.cleric}"></label>
+          <label>Бюджет стройки, % <input name="budget" type="number" min="0" max="100" value="${i.budgetPct}"></label>
+        </div>
+      </section>
+      <section class="section"><h3>Поправки лояльности на этот ход</h3>
+        <div class="stats__grid">${i.loyaltyDelta.map((l, k) => `<label>${esc(l.name)} <input name="ld${k}" type="number" min="-100" max="100" value="${l.value}"></label>`).join("")}</div>
+      </section>
+      <section class="section"><h3>Кризисы, включаемые вручную</h3>
+        <div class="stats__grid">${i.crises.map((c, k) => `<label class="check"><input name="cr${k}" type="checkbox" ${c.on ? "checked" : ""}> ${esc(c.name)}</label>`).join("")}</div>
+      </section>`;
+  }
+  $("#statsBody").addEventListener("click", (e) => {
+    if (e.target.id === "addRegion") {
+      const rows = $("#regionRows");
+      if (rows.children.length >= 18) { $("#statsMsg").textContent = "Регионов не больше 18."; return; }
+      rows.insertAdjacentHTML("beforeend", regionRowHTML());
+    }
+    if (e.target.closest("[data-del-region]")) e.target.closest("tr").remove();
+  });
+  $("#statsClose").addEventListener("click", () => $("#statsDialog").close());
+  $("#statsForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, val = (n) => (f.elements[n] ? f.elements[n].value : "");
+    if (!f.elements.sname) return;
+    const regions = [...$("#regionRows").children].map((tr) => {
+      const q = (n) => tr.querySelector(`[name="${n}"]`).value;
+      return { name: q("rname"), type: q("rtype"), estates: [0, 1, 2, 3, 4].map((k) => Number(q("re" + k)) || 0), loyalty: [0, 1, 2, 3, 4].map((k) => Number(q("rl" + k)) || 0), buildings: q("rb") };
+    }).filter((g) => g.name.trim());
+    if (!regions.length) { $("#statsMsg").textContent = "Нужен хотя бы один регион."; return; }
+    const inputs = {
+      name: val("sname"),
+      regions,
+      resources: [0, 1, 2, 3, 4, 5, 6].map((k) => ({ count: Number(val("res" + k)) || 0 })),
+      costs: { craft: Number(val("ccraft")) || 0, coins: Number(val("ccoins")) || 0, cleric: Number(val("ccleric")) || 0 },
+      budgetPct: Number(val("budget")) || 0,
+      loyaltyDelta: [0, 1, 2, 3, 4].map((k) => ({ value: Number(val("ld" + k)) || 0 })),
+      crises: [0, 1, 2, 3].map((k) => ({ on: !!(f.elements["cr" + k] && f.elements["cr" + k].checked) })),
+    };
+    const btn = $("#statsSave"); btn.disabled = true;
+    $("#statsMsg").textContent = "Записываю и пересчитываю…";
+    try {
+      const res = await api.admin("adminWriteInputs", { stateId: statsState, inputs });
+      state.ledgers.delete(statsState);
+      await reloadPublic();
+      $("#statsMsg").textContent = res.error || "Записано. Таблица пересчитана, сайт обновлён.";
+      if (state.selected === statsState) renderPanel(state.byId.get(statsState));
+    } catch (err) { $("#statsMsg").textContent = err.message; }
+    finally { btn.disabled = false; }
   });
 
   /* ---------------- кисть территорий ---------------- */

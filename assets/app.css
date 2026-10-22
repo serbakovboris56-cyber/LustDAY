@@ -340,3 +340,29 @@ button { font: inherit; color: inherit; }
 .brush__msg { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--gold-soft); }
 .brush__msg.is-error { color: var(--deficit); }
 @media (max-width: 720px) { .brush { top: 8px; padding: 8px; gap: 8px; } .brush input[type="range"] { width: 90px; } }
+
+/* ---------- правка статистики ---------- */
+.linklike { background: none; border: 0; padding: 0; color: var(--gold); text-decoration: underline; cursor: pointer; font-size: 13px; }
+.admin__links { margin-top: 4px; display: flex; gap: 10px; font-size: 13px; }
+.admin__links a { color: var(--gold); }
+.admin__source { border: 1px solid var(--rule); padding: 8px 12px; display: flex; gap: 18px; flex-wrap: wrap; }
+.admin__source legend { color: var(--gold-soft); font-size: 14px; padding: 0 4px; }
+.admin__source label { display: flex; align-items: center; gap: 6px; color: var(--gold); }
+.admin__edit { margin: 18px 0 0; }
+.stats__name { display: grid; gap: 4px; font-size: 14px; color: var(--gold-soft); }
+.stats__scroll { overflow-x: auto; margin-bottom: 10px; }
+.stats-table { border-collapse: collapse; font-size: 13px; min-width: 980px; }
+.stats-table th { color: var(--gold-soft); font-weight: 500; text-align: left; padding: 4px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.stats-table td { padding: 3px 4px 3px 0; }
+.stats-table input { width: 64px; padding: 5px 6px; font-size: 14px; }
+.stats-table td:first-child input { width: 140px; }
+.stats-table td:nth-child(2) input { width: 80px; }
+.stats-table td:nth-last-child(2) input { width: 170px; }
+.stats__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 14px; }
+.stats__grid label { display: grid; gap: 4px; font-size: 14px; color: var(--gold-soft); }
+.stats__grid .check { display: flex; align-items: center; gap: 8px; color: var(--gold); }
+#statsDialog .login__actions a { text-decoration: none; }
+#statsDialog .login__actions a[hidden] { display: none; }
+#statsDialog .login__form, #adminDialog .login__form { min-width: 0; }
+.stats__grid input, .admin__add input:not([type="radio"]):not([type="color"]) { width: 100%; min-width: 0; }
+#statsDialog .login__hint { overflow-wrap: anywhere; }

@@ -70,6 +70,10 @@ async function handlePost(body, env, ctx, request) {
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
+    case "adminReadInputs": await requireAdmin(env, body.token); return adminReadInputs(env, body.stateId);
+    case "adminWriteInputs": await requireAdmin(env, body.token); return adminWriteInputs(env, ctx, body.stateId, body.inputs);
+    case "adminCreateState": await requireAdmin(env, body.token); return adminCreateState(env, ctx, body.state);
+    case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
     case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
     case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries);
     default: throw new HttpError("Неизвестное действие");
@@ -201,14 +205,17 @@ function saKey(env) {
   try { return JSON.parse(raw.replace(/\r?\n/g, "\\n")); } catch { throw new Error("секрет GOOGLE_SA_KEY — не JSON-ключ"); }
 }
 
-let googleTokenCache = null;
-async function googleToken(env) {
-  if (googleTokenCache && googleTokenCache.exp > Date.now() + 60000) return googleTokenCache.token;
+const SCOPE_READ = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const SCOPE_WRITE = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
+const googleTokenCache = {};
+async function googleToken(env, scope = SCOPE_READ) {
+  const cached = googleTokenCache[scope];
+  if (cached && cached.exp > Date.now() + 60000) return cached.token;
   const sa = saKey(env);
   const now = Math.floor(Date.now() / 1000);
   const tokenUri = env.GOOGLE_TOKEN_URI || sa.token_uri || "https://oauth2.googleapis.com/token";
   const header = b64urlText(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claims = b64urlText(JSON.stringify({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets.readonly", aud: tokenUri, iat: now, exp: now + 3600 }));
+  const claims = b64urlText(JSON.stringify({ iss: sa.client_email, scope, aud: tokenUri, iat: now, exp: now + 3600 }));
   const pem = String(sa.private_key).replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
   const der = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0));
   const key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
@@ -220,7 +227,7 @@ async function googleToken(env) {
   });
   const data = await res.json();
   if (!data.access_token) throw new Error("Google не выдал доступ: " + (data.error_description || data.error || res.status));
-  googleTokenCache = { token: data.access_token, exp: Date.now() + (data.expires_in || 3600) * 1000 };
+  googleTokenCache[scope] = { token: data.access_token, exp: Date.now() + (data.expires_in || 3600) * 1000 };
   return data.access_token;
 }
 
@@ -371,7 +378,7 @@ async function adminStates(env, ctx) {
   return regs.map((r) => {
     const s = snap.states.find((x) => x.id === r.id);
     return { id: r.id, name: r.name, ruler: r.ruler, color: r.color, capital: r.capital, pantheon: r.pantheon, login: r.login,
-      hasPassword: !!r.pass_hash, active: r.active, linked: !!r.sheet_id,
+      hasPassword: !!r.pass_hash, active: r.active, linked: !!r.sheet_id, sheetId: r.sheet_id,
       error: s ? s.error || "" : (r.active ? "ещё не собрано — нажмите «Обновить данные»" : "скрыто") };
   });
 }
@@ -425,7 +432,143 @@ async function adminSaveBorder(env, stateId, geometry) {
 async function adminInfo(env) {
   let email = "";
   try { email = saKey(env).client_email; } catch { /* ключ ещё не задан */ }
-  return { ok: true, serviceAccount: email };
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
+  const settings = Object.fromEntries(results.map((r) => [r.key, r.value]));
+  return { ok: true, serviceAccount: email, settings: { season: settings.season || "", start_year: settings.start_year || "1200", template: settings.template || "", admin_email: settings.admin_email || "" } };
+}
+
+async function adminSaveSettings(env, st) {
+  if (!st || typeof st !== "object") return { ok: false, error: "Нет настроек." };
+  const allowed = { season: (v) => String(v).slice(0, 60), start_year: (v) => String(Number(v) || 1200), admin_email: (v) => String(v).trim().slice(0, 120),
+    template: (v) => { const id = sheetIdFromLink(v); if (String(v).trim() && !id) throw new HttpError("Шаблон: это не ссылка на Google-таблицу."); return id; } };
+  const stmts = [];
+  for (const [k, fn] of Object.entries(allowed)) if (st[k] !== undefined) stmts.push(env.DB.prepare("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value=?2").bind(k, fn(st[k])));
+  if (stmts.length) await env.DB.batch(stmts);
+  return { ok: true };
+}
+
+/* ============================================================
+ * ПРАВКА ТАБЛИЦ С САЙТА
+ * Пишем только ячейки ввода «Хроники» v15 — формулы не трогаем.
+ * ============================================================ */
+const MANUAL_CRISES = ["Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];   // Расчёты!B70:B73
+const ESTATE_KEYS = ["peasants", "artisans", "merchants", "priests", "feudals"];
+
+async function sheetsFetch(env, path, init = {}) {
+  const base = env.GOOGLE_SHEETS_BASE || "https://sheets.googleapis.com";
+  const res = await fetch(base + path, { ...init, headers: { Authorization: "Bearer " + (await googleToken(env, SCOPE_WRITE)), "Content-Type": "application/json", ...(init.headers || {}) } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    let email = ""; try { email = saKey(env).client_email; } catch { /* нет ключа */ }
+    if (res.status === 403) throw new HttpError("Нет права записи: дайте " + email + " роль «Редактор» в этой таблице.");
+    throw new HttpError("Google: " + ((data.error && data.error.message) || res.status));
+  }
+  return data;
+}
+
+async function stateRow(env, stateId) {
+  const r = await env.DB.prepare("SELECT * FROM states WHERE id = ?").bind(String(stateId || "")).first();
+  if (!r) throw new HttpError("Государство не найдено.");
+  if (!r.sheet_id) throw new HttpError("У государства нет таблицы.");
+  return r;
+}
+
+const INPUT_RANGES = ["'Статистика'!B3", "'Регионы'!A4:R21", "'Ресурсы'!B4:B10", "'Расчёты'!B70:B73", "'Расчёты'!B85:B89", "'Расчёты'!B104", "'Расчёты'!B143:B144", "'Стройки'!O4"];
+
+async function adminReadInputs(env, stateId) {
+  const r = await stateRow(env, stateId);
+  const qs = INPUT_RANGES.map((x) => "ranges=" + encodeURIComponent(x)).join("&");
+  const data = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`);
+  const v = data.valueRanges.map((x) => x.values || []);
+  const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+  const cell = (rows, i, j = 0) => (rows[i] && rows[i][j] !== undefined ? rows[i][j] : "");
+  const regions = [];
+  for (let i = 0; i < 18; i++) {
+    const row = v[1][i] || [];
+    if (!String(cell([row], 0)).trim()) continue;
+    regions.push({ row: 4 + i, name: String(row[0]), type: String(row[1] || ""),
+      estates: ESTATE_KEYS.map((_, k) => num(row[3 + k])), loyalty: ESTATE_KEYS.map((_, k) => num(row[8 + k])), buildings: String(row[17] || "") });
+  }
+  return {
+    ok: true,
+    inputs: {
+      name: String(cell(v[0], 0)),
+      regions,
+      resources: RESOURCE_NAMES.map((name, i) => ({ name, count: num(cell(v[2], i)) })),
+      crises: MANUAL_CRISES.map((name, i) => ({ name, on: cell(v[3], i) === "ДА" })),
+      loyaltyDelta: ESTATES.map((name, i) => ({ name, value: num(cell(v[4], i)) })),
+      costs: { cleric: num(cell(v[5], 0)), craft: num(cell(v[6], 0)), coins: num(cell(v[6], 1)) },
+      budgetPct: num(cell(v[7], 0)) || 30,
+    },
+  };
+}
+
+async function adminWriteInputs(env, ctx, stateId, inp) {
+  const r = await stateRow(env, stateId);
+  if (!inp || typeof inp !== "object") return { ok: false, error: "Нет данных." };
+  const n = (x, min = -1e9, max = 1e12) => { const v = Number(x); return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : 0; };
+  const data = [];
+  if (inp.name !== undefined) data.push({ range: "'Статистика'!B3", values: [[String(inp.name).slice(0, 80)]] });
+  if (Array.isArray(inp.resources)) data.push({ range: "'Ресурсы'!B4:B10", values: RESOURCE_NAMES.map((_, i) => [Math.round(n(inp.resources[i] && inp.resources[i].count, 0, 99))]) });
+  if (Array.isArray(inp.crises)) data.push({ range: "'Расчёты'!B70:B73", values: MANUAL_CRISES.map((_, i) => [inp.crises[i] && inp.crises[i].on ? "ДА" : "НЕТ"]) });
+  if (Array.isArray(inp.loyaltyDelta)) data.push({ range: "'Расчёты'!B85:B89", values: ESTATES.map((_, i) => [Math.round(n(inp.loyaltyDelta[i] && inp.loyaltyDelta[i].value, -100, 100))]) });
+  if (inp.costs) {
+    data.push({ range: "'Расчёты'!B104", values: [[n(inp.costs.cleric, 0)]] });
+    data.push({ range: "'Расчёты'!B143:B144", values: [[n(inp.costs.craft, 0)], [n(inp.costs.coins, 0)]] });
+  }
+  if (inp.budgetPct !== undefined) data.push({ range: "'Стройки'!O4", values: [[Math.round(n(inp.budgetPct, 0, 100))]] });
+  if (Array.isArray(inp.regions)) {
+    if (inp.regions.length > 18) return { ok: false, error: "Регионов не больше 18." };
+    // Строки 4..21 переписываем по порядку; формулы в C, N–Q не трогаем.
+    const ab = [], dm = [], rr = [];
+    for (let i = 0; i < 18; i++) {
+      const g = inp.regions[i];
+      if (g && String(g.name || "").trim()) {
+        ab.push([String(g.name).trim().slice(0, 60), String(g.type || "Город").slice(0, 30)]);
+        dm.push([...ESTATE_KEYS.map((_, k) => Math.round(n(g.estates && g.estates[k], 0))), ...ESTATE_KEYS.map((_, k) => Math.round(n(g.loyalty && g.loyalty[k], 0, 100)))]);
+        rr.push([String(g.buildings || "").slice(0, 500)]);
+      } else { ab.push(["", ""]); dm.push(Array(10).fill("")); rr.push([""]); }
+    }
+    data.push({ range: "'Регионы'!A4:B21", values: ab }, { range: "'Регионы'!D4:M21", values: dm }, { range: "'Регионы'!R4:R21", values: rr });
+  }
+  if (!data.length) return { ok: false, error: "Нечего сохранять." };
+  await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
+  // пересобираем цифры этого государства, чтобы сайт сразу показал новое
+  const snap = await refreshSnapshot(env);
+  const s = snap.states.find((x) => x.id === r.id);
+  return { ok: true, ledger: s && s.ledger, public: s && s.public, error: s && s.error ? "Записано, но чтение не удалось: " + s.error : undefined };
+}
+
+async function driveFetch(env, path, init = {}) {
+  const res = await fetch((env.GOOGLE_DRIVE_BASE || "https://www.googleapis.com/drive/v3") + path, { ...init, headers: { Authorization: "Bearer " + (await googleToken(env, SCOPE_WRITE)), "Content-Type": "application/json", ...(init.headers || {}) } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data.error && data.error.message) || String(res.status);
+    if (/has not been used|disabled/i.test(msg)) throw new HttpError("Включите Google Drive API в проекте Google Cloud — без него таблицы не копируются.");
+    if (/storage quota|quotaExceeded/i.test(msg)) throw new HttpError("У робота Google нет места на Диске для копии. Создайте копию шаблона вручную и вставьте ссылку.");
+    if (res.status === 404 || res.status === 403) throw new HttpError("Нет доступа к шаблону: откройте шаблон для робота Google.");
+    throw new HttpError("Google Drive: " + msg);
+  }
+  return data;
+}
+
+// Новое государство одной кнопкой: копия шаблона «Хроники» → имя → доступ админу → запись в реестр.
+async function adminCreateState(env, ctx, st) {
+  if (!st || !/^[a-z0-9_-]{2,20}$/i.test(String(st.id || ""))) return { ok: false, error: "ID: 2–20 латинских букв или цифр." };
+  const id = String(st.id).toLowerCase();
+  if (await env.DB.prepare("SELECT id FROM states WHERE id = ?").bind(id).first()) return { ok: false, error: "Государство с таким ID уже есть." };
+  const cfg = Object.fromEntries((await env.DB.prepare("SELECT key, value FROM settings").all()).results.map((r) => [r.key, r.value]));
+  if (!cfg.template) return { ok: false, error: "Не задан шаблон таблицы — укажите его в «Настройках» управления." };
+  const name = String(st.name || id).trim().slice(0, 80);
+  const copy = await driveFetch(env, `/files/${cfg.template}/copy?fields=id`, { method: "POST", body: JSON.stringify({ name: `ВПИ — ${name}` }) });
+  if (cfg.admin_email) {
+    await driveFetch(env, `/files/${copy.id}/permissions?sendNotificationEmail=false`, { method: "POST", body: JSON.stringify({ role: "writer", type: "user", emailAddress: cfg.admin_email }) });
+  }
+  await sheetsFetch(env, `/v4/spreadsheets/${copy.id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: "'Статистика'!B3", values: [[name]] }] }) }).catch(() => null);
+  const saved = await adminSaveState(env, { ...st, id, name, link: copy.id, active: true });
+  if (!saved.ok) return saved;
+  ctx.waitUntil(refreshSnapshot(env));
+  return { ok: true, id, sheetUrl: `https://docs.google.com/spreadsheets/d/${copy.id}/edit` };
 }
 
 // Кисть территорий: сетка клеток хранится в KV, контуры государств — в таблице borders.

@@ -88,10 +88,40 @@
       <label>Столица <input name="capital"></label>
       <label>Цвет на карте <input name="color" type="color" value="#C8463A"></label>
       <label>Логин игрока <input name="login" autocomplete="off"></label>
-      <label class="admin__wide">Ссылка на таблицу государства <input name="link" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+      <fieldset class="admin__wide admin__source">
+        <legend>Таблица статистики</legend>
+        <label><input type="radio" name="source" value="create" checked> Создать новую из шаблона</label>
+        <label><input type="radio" name="source" value="link"> Указать готовую</label>
+      </fieldset>
+      <label class="admin__wide" id="linkField" hidden>Ссылка на таблицу государства <input name="link" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
       <div class="admin__wide"><button class="btn" type="submit">Сохранить государство</button></div>
     </form>
+    <form id="adminSettings" class="admin__add">
+      <h3>Настройки</h3>
+      <label class="admin__wide">Шаблон таблицы «Хроники» (ссылка) <input name="template" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+      <label>Почта администратора (доступ к новым таблицам) <input name="admin_email" type="email"></label>
+      <label>Сезон <input name="season"></label>
+      <label>Год начала <input name="start_year" type="number"></label>
+      <p class="admin__wide login__hint" id="saInfo"></p>
+      <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сохранить настройки</button></div>
+    </form>
   </div>
+</dialog>
+
+<dialog class="login admin" id="statsDialog">
+  <form class="login__form" id="statsForm">
+    <div class="admin__head">
+      <h2 id="statsTitle">Статистика</h2>
+      <button class="panel__close" id="statsClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <p class="login__hint">Здесь меняются ячейки ввода таблицы «Хроники». Всё остальное таблица пересчитает сама. Ход по-прежнему применяется в таблице через «Мастер хода».</p>
+    <div id="statsBody"><p class="loading">Читаю таблицу…</p></div>
+    <p class="login__error" id="statsMsg" role="status"></p>
+    <div class="login__actions">
+      <a class="btn btn--ghost" id="statsSheetLink" target="_blank" rel="noopener">Открыть таблицу</a>
+      <button class="btn" type="submit" id="statsSave">Записать в таблицу</button>
+    </div>
+  </form>
 </dialog>
 
 <script src="assets/config.js"></script>
