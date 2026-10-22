@@ -95,16 +95,15 @@
   const toLatLng = (x, y) => map.unproject([x, y], NATIVE_Z);
   const bounds = L.latLngBounds(toLatLng(0, MAP_H), toLatLng(MAP_W, 0));
 
-  L.tileLayer("tiles/{z}/{y}/{x}.webp", {
-    bounds, noWrap: true, minZoom: 0, maxNativeZoom: NATIVE_Z, maxZoom: NATIVE_Z + 1.5, keepBuffer: 4,
-    attribution: "Карта мира ВПИ",
-  }).addTo(map);
+  map.attributionControl.addAttribution("Карта мира ВПИ");
+  let vector = null;           // векторная карта (assets/vector-map.js)
+  let bordersGeo = { type: "FeatureCollection", features: [] };
 
   function fitWorld() {
     map.fitBounds(bounds, { animate: false });
     const fit = map.getBoundsZoom(bounds, false);
     map.setMinZoom(Math.max(0, fit - 0.5));
-    map.setMaxZoom(NATIVE_Z + 1.5);
+    map.setMaxZoom(NATIVE_Z + 1);
     map.setMaxBounds(bounds.pad(0.2));
     // На вертикальном экране карта иначе превращается в узкую полоску — заполняем высоту.
     if (innerHeight > innerWidth) {
@@ -122,34 +121,58 @@
   map.on("zoomend", updateLabelSize);
   updateLabelSize();
 
+  // Территории рисует векторный слой; поверх — невидимые фигуры для наведения, клика и подписей.
   let bordersLayer = null;
+  const labelsLayer = L.layerGroup().addTo(map);
+  // Точка для подписи: центр тяжести самого большого куска территории.
+  function labelPoint(geom) {
+    const polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+    let best = null;
+    for (const poly of polys) {
+      const r = poly[0]; let a = 0, cx = 0, cy = 0;
+      for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+        const f = r[j][0] * r[i][1] - r[i][0] * r[j][1];
+        a += f; cx += (r[j][0] + r[i][0]) * f; cy += (r[j][1] + r[i][1]) * f;
+      }
+      if (!a) continue;
+      if (!best || Math.abs(a) > best.a) best = { a: Math.abs(a), x: cx / (3 * a), y: cy / (3 * a) };
+    }
+    return best ? toLatLng(best.x, best.y) : null;
+  }
+  function paintTerritories() {
+    if (!vector) return;
+    vector.setTerritories(bordersGeo.features, (id) => {
+      const s = state.byId.get(id);
+      return s ? { color: s.color, selected: state.selected === id } : null;
+    });
+  }
   function addBorders(geo) {
+    bordersGeo = geo || bordersGeo;
     if (bordersLayer) bordersLayer.remove();
+    labelsLayer.clearLayers();
     state.layers.clear();
-    bordersLayer = L.geoJSON(geo, {
+    paintTerritories();
+    bordersLayer = L.geoJSON(bordersGeo, {
       coordsToLatLng: (c) => toLatLng(c[0], c[1]),
-      style: (f) => {
-        const s = state.byId.get(f.properties.id);
-        const color = s ? s.color : "#FFD700";
-        return { color, weight: 2, opacity: 0.95, fillColor: color, fillOpacity: 0.3 };
-      },
+      style: () => ({ stroke: false, fillColor: "#FFD700", fillOpacity: 0 }),
       onEachFeature: (f, layer) => {
         const s = state.byId.get(f.properties.id);
         if (!s) return;
         state.layers.set(s.id, layer);
         const words = s.name.split(" ");
         const label = words.length > 1 ? `${esc(words.slice(0, -1).join(" "))}<br>${esc(words.at(-1))}` : esc(s.name);
-        layer.bindTooltip(label, { permanent: true, direction: "center", className: "state-label", opacity: 1 });
+        const at = labelPoint(f.geometry);
+        if (at) L.tooltip({ permanent: true, direction: "center", className: "state-label", opacity: 1, interactive: false }).setLatLng(at).setContent(label).addTo(labelsLayer);
         layer.on({
-          mouseover: () => { if (state.selected !== s.id) layer.setStyle({ fillOpacity: 0.42 }); },
-          mouseout: () => { if (state.selected !== s.id) layer.setStyle({ fillOpacity: 0.3 }); },
-          click: (e) => { L.DomEvent.stopPropagation(e); select(s.id, { fly: false }); },
+          mouseover: () => layer.setStyle({ fillOpacity: 0.08 }),
+          mouseout: () => layer.setStyle({ fillOpacity: 0 }),
+          click: (e) => { if (window.VPI_PAINTING) return; L.DomEvent.stopPropagation(e); select(s.id, { fly: false }); },
         });
       },
     }).addTo(map);
   }
 
-  map.on("click", () => { if (state.selected) closePanel(); });
+  map.on("click", () => { if (state.selected && !window.VPI_EDITING) closePanel(); });
 
   /* ---------------- roster ---------------- */
   function renderRoster() {
@@ -176,11 +199,10 @@
   function select(id, { fly }) {
     const s = state.byId.get(id);
     if (!s) return;
-    if (state.selected && state.layers.get(state.selected)) state.layers.get(state.selected).setStyle({ fillOpacity: 0.3, weight: 2 });
     state.selected = id;
+    paintTerritories();
     const layer = state.layers.get(id);
     if (layer) {
-      layer.setStyle({ fillOpacity: 0.4, weight: 3 });
       if (fly) {
         const narrow = matchMedia("(max-width: 720px)").matches;
         map.flyToBounds(layer.getBounds(), {
@@ -197,8 +219,8 @@
   }
 
   function closePanel() {
-    if (state.selected && state.layers.get(state.selected)) state.layers.get(state.selected).setStyle({ fillOpacity: 0.3, weight: 2 });
     state.selected = null;
+    paintTerritories();
     $("#panel").hidden = true;
     $(".stage").classList.remove("has-panel");
     document.querySelectorAll("#rosterList button").forEach((b) => b.setAttribute("aria-current", "false"));
@@ -369,6 +391,7 @@
     $("#loginBtn").textContent = ses ? "Выйти" : "Войти";
     $("#loginBtn").classList.toggle("btn--ghost", !!ses);
     $("#adminBtn").hidden = !(ses && ses.role === "admin");
+    $("#brushBtn").hidden = !(ses && ses.role === "admin");
     $("#whoami").textContent = !ses ? "" : ses.role === "admin" ? "Администратор" : own ? own.name : "";
   }
   function openLogin() {
@@ -485,6 +508,32 @@
     } catch (err) { adminMsg(err.message, true); }
   });
 
+  /* ---------------- кисть территорий ---------------- */
+  $("#brushBtn").addEventListener("click", () => {
+    if (window.VPI_EDITING) return;
+    window.VPI_EDITING = true;
+    if (state.selected) closePanel();
+    $("#brushBtn").disabled = true;
+    vector.setTerritories([], () => null);          // на время правки старые границы прячем
+    if (bordersLayer) bordersLayer.remove();
+    labelsLayer.clearLayers();
+    window.VPITerritoryEditor.open({
+      map, nativeZ: NATIVE_Z,
+      states: state.data.states.map((s) => ({ id: s.id, name: s.name, color: s.color })),
+      borders: bordersGeo,
+      loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
+      save: async ({ grid, geometries }) => {
+        if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries });
+        bordersGeo = { type: "FeatureCollection", features: Object.entries(geometries).filter(([, g]) => g).map(([id, geometry]) => ({ type: "Feature", properties: { id }, geometry })) };
+      },
+      onClose: () => {
+        window.VPI_EDITING = false;
+        $("#brushBtn").disabled = false;
+        addBorders(bordersGeo);
+      },
+    }).catch((err) => { alert(err.message); window.VPI_EDITING = false; $("#brushBtn").disabled = false; addBorders(bordersGeo); });
+  });
+
   /* ---------------- boot ---------------- */
   function applyPublic(data) {
     state.data = data;
@@ -497,7 +546,8 @@
 
   (async function boot() {
     try {
-      const [data, geo] = await Promise.all([api.publicData(), api.borders()]);
+      const [data, geo, mapData] = await Promise.all([api.publicData(), api.borders(), getJSON("assets/map.json")]);
+      vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
       applyPublic(data);
       addBorders(geo);
       const fromHash = location.hash.slice(1);

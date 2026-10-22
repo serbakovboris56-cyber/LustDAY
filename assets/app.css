@@ -323,3 +323,20 @@ button { font: inherit; color: inherit; }
   .bar__actions { gap: 6px; flex: none; }
   .bar .btn { padding: 6px 10px; font-size: 14px; }
 }
+
+/* ---------- кисть территорий ---------- */
+.brush {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 950; background: var(--ink); border: 1px solid var(--gold);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px;
+  max-width: calc(100% - 24px);
+}
+.brush[hidden] { display: none; }
+.brush__field { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--gold-soft); }
+.brush select { background: var(--banner); color: var(--gold); border: 1px solid var(--rule); padding: 6px 8px; font: inherit; }
+.brush input[type="range"] { accent-color: var(--gold); width: 120px; }
+.brush__modes, .brush__actions { display: flex; gap: 6px; }
+.brush [aria-pressed="true"] { background: var(--gold); color: var(--ink); }
+.brush__msg { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--gold-soft); }
+.brush__msg.is-error { color: var(--deficit); }
+@media (max-width: 720px) { .brush { top: 8px; padding: 8px; gap: 8px; } .brush input[type="range"] { width: 90px; } }

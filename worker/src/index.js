@@ -70,6 +70,8 @@ async function handlePost(body, env, ctx, request) {
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
+    case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
+    case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries);
     default: throw new HttpError("Неизвестное действие");
   }
 }
@@ -424,4 +426,22 @@ async function adminInfo(env) {
   let email = "";
   try { email = saKey(env).client_email; } catch { /* ключ ещё не задан */ }
   return { ok: true, serviceAccount: email };
+}
+
+// Кисть территорий: сетка клеток хранится в KV, контуры государств — в таблице borders.
+async function adminSaveTerritories(env, grid, geometries) {
+  if (!grid || !Array.isArray(grid.rle) || !Array.isArray(grid.owners)) return { ok: false, error: "Нет данных сетки." };
+  if (!geometries || typeof geometries !== "object") return { ok: false, error: "Нет контуров." };
+  await env.KV.put("territory_grid", JSON.stringify({ w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, updated: new Date().toISOString() }));
+  const now = new Date().toISOString();
+  const stmts = [];
+  for (const [id, geom] of Object.entries(geometries)) {
+    if (geom && ["Polygon", "MultiPolygon"].includes(geom.type)) {
+      stmts.push(env.DB.prepare("INSERT INTO borders (state_id, geometry, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET geometry=?2, updated=?3").bind(id, JSON.stringify(geom), now));
+    } else {
+      stmts.push(env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(id));
+    }
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return { ok: true };
 }

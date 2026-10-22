@@ -21,6 +21,7 @@
   </div>
   <div class="bar__actions">
     <span class="bar__who" id="whoami"></span>
+    <button class="btn btn--ghost" id="brushBtn" type="button" hidden>Территории</button>
     <button class="btn btn--ghost" id="adminBtn" type="button" hidden>Управление</button>
     <button class="btn" id="loginBtn" type="button">Войти</button>
   </div>
@@ -33,6 +34,21 @@
     <button class="roster__toggle" id="rosterToggle" type="button" aria-expanded="true">Государства</button>
     <ul class="roster__list" id="rosterList"></ul>
   </nav>
+
+  <div class="brush" id="brushBar" hidden role="toolbar" aria-label="Кисть территорий">
+    <label class="brush__field">Государство <select id="brushState"></select></label>
+    <div class="brush__modes">
+      <button type="button" class="btn btn--ghost" data-mode="brush" aria-pressed="true">Кисть</button>
+      <button type="button" class="btn btn--ghost" data-mode="erase" aria-pressed="false">Ластик</button>
+      <button type="button" class="btn btn--ghost" data-mode="pan" aria-pressed="false">Рука</button>
+    </div>
+    <label class="brush__field">Размер <input id="brushSize" type="range" min="1" max="40" value="6"> <output id="brushSizeOut">6</output></label>
+    <div class="brush__actions">
+      <button type="button" class="btn btn--ghost" id="brushCancel">Отмена</button>
+      <button type="button" class="btn" id="brushSave">Сохранить границы</button>
+    </div>
+    <p class="brush__msg" role="status"></p>
+  </div>
 
   <aside class="panel" id="panel" aria-live="polite" hidden>
     <button class="panel__close" id="panelClose" type="button" aria-label="Закрыть">×</button>
@@ -80,6 +96,8 @@
 
 <script src="assets/config.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
+<script src="assets/vector-map.js"></script>
+<script src="assets/territory-editor.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>
