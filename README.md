@@ -30,3 +30,11 @@
 python3 -m http.server 8000
 ```
 и открыть http://localhost:8000
+
+## Горы на карте
+
+Горные хребты (`ranges` в `assets/map.json`) и значки вершин строит `tools/mountain_ranges.py` из SVG-экспорта карты Figma (слои «Биомы» и «Карта высот»):
+
+```
+python3 tools/mountain_ranges.py экспорт.svg assets/map.json
+```
