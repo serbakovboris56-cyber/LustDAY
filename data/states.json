@@ -1,0 +1,399 @@
+{
+  "demo": true,
+  "turn": 1,
+  "season": "Средневековье",
+  "updated": "2026-10-22",
+  "states": [
+    {
+      "id": "arn",
+      "name": "Арнорское королевство",
+      "ruler": "Король Эдрик II",
+      "color": "#C8463A",
+      "capital": "Арнбург",
+      "pantheon": "Пресветлый Сонм",
+      "public": {
+        "population": 18760,
+        "regions": 3,
+        "army": 400
+      },
+      "ledger": {
+        "estates": [
+          {
+            "key": "peasants",
+            "name": "Крестьяне",
+            "count": 14000,
+            "yield": "30 800 еды"
+          },
+          {
+            "key": "artisans",
+            "name": "Ремесленники",
+            "count": 3000,
+            "yield": "300 ремесла"
+          },
+          {
+            "key": "merchants",
+            "name": "Торговцы",
+            "count": 900,
+            "yield": "900 монет"
+          },
+          {
+            "key": "priests",
+            "name": "Священники",
+            "count": 700,
+            "yield": "7 клирики"
+          },
+          {
+            "key": "feudals",
+            "name": "Феодалы",
+            "count": 160,
+            "yield": "80 спец. + 320 сброда"
+          }
+        ],
+        "pools": {
+          "treasury": {
+            "stock": 2640,
+            "income": 1100
+          },
+          "warehouse": {
+            "stock": 610,
+            "income": 300
+          },
+          "fund": {
+            "stock": 420,
+            "pct": 30
+          }
+        },
+        "food": {
+          "stock": 4100,
+          "production": 30800,
+          "consumption": 28300
+        },
+        "clerics": {
+          "stock": 12,
+          "income": 7
+        },
+        "loyalty": [
+          {
+            "name": "Крестьяне",
+            "value": 62
+          },
+          {
+            "name": "Ремесленники",
+            "value": 70
+          },
+          {
+            "name": "Торговцы",
+            "value": 58
+          },
+          {
+            "name": "Священники",
+            "value": 81
+          },
+          {
+            "name": "Феодалы",
+            "value": 74
+          }
+        ],
+        "resources": [
+          "Золото",
+          "Соль",
+          "Камни"
+        ],
+        "army": {
+          "specialists": 80,
+          "rabble": 320
+        },
+        "regions": [
+          {
+            "name": "Арнбург (столица)",
+            "population": 9800,
+            "loyalty": 78,
+            "buildings": [
+              "Ратуша",
+              "Храм Сонма",
+              "Рынок",
+              "Казармы"
+            ]
+          },
+          {
+            "name": "Долина Ведры",
+            "population": 5600,
+            "loyalty": 64,
+            "buildings": [
+              "Мельница",
+              "Солеварня"
+            ]
+          },
+          {
+            "name": "Каменный кряж",
+            "population": 3360,
+            "loyalty": 55,
+            "buildings": [
+              "Каменоломня"
+            ]
+          }
+        ],
+        "crises": []
+      }
+    },
+    {
+      "id": "vel",
+      "name": "Вельмарская теократия",
+      "ruler": "Верховная жрица Ильвара",
+      "color": "#3D7FCF",
+      "capital": "Вельмар",
+      "pantheon": "Храм Тихой Луны",
+      "public": {
+        "population": 14230,
+        "regions": 2,
+        "army": 250
+      },
+      "ledger": {
+        "estates": [
+          {
+            "key": "peasants",
+            "name": "Крестьяне",
+            "count": 10200,
+            "yield": "20 400 еды"
+          },
+          {
+            "key": "artisans",
+            "name": "Ремесленники",
+            "count": 1800,
+            "yield": "180 ремесла"
+          },
+          {
+            "key": "merchants",
+            "name": "Торговцы",
+            "count": 500,
+            "yield": "500 монет"
+          },
+          {
+            "key": "priests",
+            "name": "Священники",
+            "count": 1630,
+            "yield": "16 клирики (+1 благовония)"
+          },
+          {
+            "key": "feudals",
+            "name": "Феодалы",
+            "count": 100,
+            "yield": "50 спец. + 200 сброда"
+          }
+        ],
+        "pools": {
+          "treasury": {
+            "stock": 1180,
+            "income": 500
+          },
+          "warehouse": {
+            "stock": 340,
+            "income": 180
+          },
+          "fund": {
+            "stock": 210,
+            "pct": 30
+          }
+        },
+        "food": {
+          "stock": 900,
+          "production": 20400,
+          "consumption": 21445
+        },
+        "clerics": {
+          "stock": 41,
+          "income": 17
+        },
+        "loyalty": [
+          {
+            "name": "Крестьяне",
+            "value": 48
+          },
+          {
+            "name": "Ремесленники",
+            "value": 57
+          },
+          {
+            "name": "Торговцы",
+            "value": 51
+          },
+          {
+            "name": "Священники",
+            "value": 92
+          },
+          {
+            "name": "Феодалы",
+            "value": 60
+          }
+        ],
+        "resources": [
+          "Благовония",
+          "Железо"
+        ],
+        "army": {
+          "specialists": 50,
+          "rabble": 200
+        },
+        "regions": [
+          {
+            "name": "Вельмар (столица)",
+            "population": 9100,
+            "loyalty": 71,
+            "buildings": [
+              "Собор Луны",
+              "Обитель",
+              "Скрипторий"
+            ]
+          },
+          {
+            "name": "Сизые топи",
+            "population": 5130,
+            "loyalty": 49,
+            "buildings": [
+              "Рудник"
+            ]
+          }
+        ],
+        "crises": [
+          "Голод: еды не хватает на 1 045 в год"
+        ]
+      }
+    },
+    {
+      "id": "sar",
+      "name": "Саррадский эмират",
+      "ruler": "Эмир Хасир ибн Тарек",
+      "color": "#3E9E62",
+      "capital": "Сарра",
+      "pantheon": "Огни Пустыни",
+      "public": {
+        "population": 21400,
+        "regions": 4,
+        "army": 600
+      },
+      "ledger": {
+        "estates": [
+          {
+            "key": "peasants",
+            "name": "Крестьяне",
+            "count": 16300,
+            "yield": "32 600 еды"
+          },
+          {
+            "key": "artisans",
+            "name": "Ремесленники",
+            "count": 2600,
+            "yield": "260 ремесла"
+          },
+          {
+            "key": "merchants",
+            "name": "Торговцы",
+            "count": 1400,
+            "yield": "1 610 монет (+15% шёлк)"
+          },
+          {
+            "key": "priests",
+            "name": "Священники",
+            "count": 860,
+            "yield": "8 клирики"
+          },
+          {
+            "key": "feudals",
+            "name": "Феодалы",
+            "count": 240,
+            "yield": "120 спец. + 480 сброда"
+          }
+        ],
+        "pools": {
+          "treasury": {
+            "stock": 6930,
+            "income": 1610
+          },
+          "warehouse": {
+            "stock": 450,
+            "income": 260
+          },
+          "fund": {
+            "stock": 1290,
+            "pct": 30
+          }
+        },
+        "food": {
+          "stock": 2300,
+          "production": 32600,
+          "consumption": 32340
+        },
+        "clerics": {
+          "stock": 6,
+          "income": 8
+        },
+        "loyalty": [
+          {
+            "name": "Крестьяне",
+            "value": 55
+          },
+          {
+            "name": "Ремесленники",
+            "value": 61
+          },
+          {
+            "name": "Торговцы",
+            "value": 88
+          },
+          {
+            "name": "Священники",
+            "value": 63
+          },
+          {
+            "name": "Феодалы",
+            "value": 69
+          }
+        ],
+        "resources": [
+          "Шёлк",
+          "Уголь"
+        ],
+        "army": {
+          "specialists": 120,
+          "rabble": 480
+        },
+        "regions": [
+          {
+            "name": "Сарра (столица)",
+            "population": 8800,
+            "loyalty": 80,
+            "buildings": [
+              "Дворец эмира",
+              "Большой базар",
+              "Караван-сарай"
+            ]
+          },
+          {
+            "name": "Оазис Нуур",
+            "population": 5200,
+            "loyalty": 66,
+            "buildings": [
+              "Колодцы",
+              "Сады"
+            ]
+          },
+          {
+            "name": "Барханный край",
+            "population": 4100,
+            "loyalty": 52,
+            "buildings": []
+          },
+          {
+            "name": "Медный берег",
+            "population": 3300,
+            "loyalty": 58,
+            "buildings": [
+              "Порт"
+            ]
+          }
+        ],
+        "crises": []
+      }
+    }
+  ]
+}
