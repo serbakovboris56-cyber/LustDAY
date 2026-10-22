@@ -1,0 +1,24 @@
+name = "vpi-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Сайт, которому разрешено обращаться к серверу (через запятую можно добавить ещё)
+[vars]
+ALLOWED_ORIGINS = "https://serbakovboris56-cyber.github.io,http://localhost:8000,http://localhost:8765"
+
+# Сбор свежих цифр из таблиц — каждые 10 минут
+[triggers]
+crons = ["*/10 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vpi"
+database_id = "REPLACE_WITH_D1_ID"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_KV_ID"
+
+# Секреты задаются в панели Cloudflare (Settings → Variables and Secrets), не здесь:
+#   GOOGLE_SA_KEY   — JSON-ключ сервисного аккаунта Google целиком
+#   ADMIN_PASSWORD  — пароль администратора (логин admin)
