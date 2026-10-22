@@ -1,5 +1,5 @@
 // Адрес веб-приложения Apps Script (заканчивается на /exec).
 // Пока пусто — сайт работает на демо-данных из папки data/.
 window.VPI_CONFIG = {
-  apiUrl: "",
+  apiUrl: "https://lustday.serbakovboris56.workers.dev",
 };
