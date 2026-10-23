@@ -175,7 +175,7 @@
     if (!vector) return;
     vector.setTerritories(bordersGeo.features, (id) => {
       const s = state.byId.get(id);
-      return s ? { color: s.color, selected: state.selected === id, regions: (s.public && s.public.provinces) || null } : null;
+      return s ? { color: s.color, selected: state.selected === id, regions: (s.public && s.public.provinces) || null, style: s.style } : null;
     });
   }
   function addBorders(geo) {
@@ -235,8 +235,11 @@
       const p = map.project(tipEvent.latlng, NATIVE_Z), k = Math.pow(2, map.getZoom() - NATIVE_Z);
       const t = vector.townAt(p.x, p.y, k);
       if (!t) { townTip.remove(); map.getContainer().classList.remove("is-town"); return; }
-      const b = t.buildings.length ? `<div class="town-tip__b">${t.buildings.map(esc).join(", ")}</div>` : "";
-      townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${t.capital ? "Столица, " : ""}${esc(t.tier.toLowerCase())}${t.pop ? ` · ${fmt(t.pop)} жителей` : ""}</div>${b}`);
+      if (t.building) townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${esc(t.town)}</div>`);
+      else {
+        const b = t.buildings.length ? `<div class="town-tip__b">${t.buildings.map(esc).join(", ")}</div>` : "";
+        townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${t.capital ? "Столица, " : ""}${esc(t.tier.toLowerCase())}${t.pop ? ` · ${fmt(t.pop)} жителей` : ""}</div>${b}`);
+      }
       if (!map.hasLayer(townTip)) townTip.addTo(map);
       map.getContainer().classList.add("is-town");
     });
@@ -492,6 +495,7 @@
     $("#loginBtn").classList.toggle("btn--ghost", !!ses);
     $("#adminBtn").hidden = !(ses && ses.role === "admin");
     $("#turnBtn").hidden = !(ses && ses.role === "admin");
+    $("#buildBtn").hidden = !(ses && ses.role === "admin");
     $("#historyBtn").hidden = !(ses && ses.role === "admin");
     $("#brushBtn").hidden = !(ses && ses.role === "admin");
     $("#whoami").textContent = !ses ? "" : ses.role === "admin" ? "Администратор" : own ? own.name : "";
@@ -879,6 +883,182 @@
       if (state.selected === statsState) renderPanel(state.byId.get(statsState));
     } catch (err) { $("#statsMsg").textContent = err.message; }
     finally { btn.disabled = false; }
+  });
+
+  /* ---------------- вкладка «Постройки» ---------------- */
+  // Постройки региона — текст колонки R «Регионов» («Ферма x3, Портал»); по нему на карте рисуются значки.
+  // Здесь его собирают кнопками из библиотеки 96 зданий; «Построено» на листе «Стройки» меняется на ту же разницу.
+  const VB = window.VPIBuildings;
+  const bld = { stateId: null, regions: [], built: {}, style: "west", row: null, items: [], orig: new Map(), busy: false };
+  function bldMsg(text, isError) { const m = $("#bldMsg"); m.textContent = text || ""; m.classList.toggle("is-error", !!isError); }
+  // Текст колонки → [{name, n, lib}]: повторы складываются, «Фермы»/«ферма» сводятся к названию из библиотеки
+  function parseBuildList(text) {
+    const out = [];
+    for (const part of String(text || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)) {
+      // название из библиотеки — для того же здания; «Замок» остаётся «Замком» (значок крепости, «Стройки» не трогаем)
+      const { name, n } = window.VPISettlements.parseBuilding(part), lib = VB.findBuilding(name, true), key = lib ? lib.name : name;
+      const have = out.find((x) => x.name === key);
+      if (have) have.n += n; else out.push({ name: key, n, lib: !!lib });
+    }
+    return out;
+  }
+  const buildText = (items) => items.filter((x) => x.n > 0).map((x) => (x.n > 1 ? `${x.name} x${x.n}` : x.name)).join(", ");
+  const bldRegion = () => bld.regions.find((r) => r.row === bld.row);
+  const bldDirty = () => { const r = bldRegion(); return !!r && buildText(bld.items) !== buildText(parseBuildList(r.buildings)); };
+  // значок здания в маленьком холсте
+  function iconCanvas(name, cls = "bld__icon") {
+    const c = document.createElement("canvas"), px = 128;
+    c.width = c.height = px; c.className = cls;
+    const lib = VB.findBuilding(name), s = state.byId.get(bld.stateId);
+    const spr = (lib && VB.buildingSprite(lib, bld.style, s && s.color)) || VB.genericSprite(bld.style);
+    const sc = Math.min((px - 8) / spr.c.width, (px - 8) / spr.c.height);
+    c.getContext("2d").drawImage(spr.c, (px - spr.c.width * sc) / 2, (px - spr.c.height * sc) / 2, spr.c.width * sc, spr.c.height * sc);
+    return c;
+  }
+  async function openBuildings(stateId) {
+    if (!$("#buildDialog").open) $("#buildDialog").showModal();
+    const states = (state.data && state.data.states) || [];
+    $("#bldState").innerHTML = states.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+    $("#bldStyle").innerHTML = Object.entries(VB.STYLES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+    $("#bldCat").innerHTML = `<option value="">Все категории</option>` + Object.entries(VB.CATS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+    const id = stateId || (state.selected && state.byId.has(state.selected) ? state.selected : states[0] && states[0].id);
+    if (id) await loadBuildState(id);
+  }
+  async function loadBuildState(stateId) {
+    bld.stateId = stateId; bld.regions = []; bld.row = null; bld.items = [];
+    $("#bldState").value = stateId;
+    const s = state.byId.get(stateId);
+    bld.style = (s && s.style) || VB.DEFAULT_STYLE;
+    $("#bldStyle").value = bld.style;
+    $("#bldList").innerHTML = `<li class="bld__empty loading">Читаю таблицу…</li>`;
+    bldMsg("");
+    try {
+      if (DEMO) {
+        const led = state.demoLedgers.get(stateId);
+        bld.regions = ((led && led.regions) || []).map((r, i) => ({ row: 4 + i, name: r.name, type: r.type, buildings: (r.buildings || []).join(", ") }));
+        bld.built = {};
+        bldMsg("Демо-режим: изменения видны на карте, но в таблицу не пишутся.");
+      } else {
+        const res = await api.admin("adminReadBuildings", { stateId });
+        if (bld.stateId !== stateId) return;
+        bld.regions = res.regions; bld.built = res.built || {}; bld.style = res.style || bld.style;
+        $("#bldStyle").value = bld.style;
+      }
+    } catch (err) { $("#bldList").innerHTML = ""; bldMsg(err.message, true); return; }
+    $("#bldRegion").innerHTML = bld.regions.map((r) => `<option value="${r.row}">${esc(r.name)}${r.type ? " — " + esc(r.type) : ""}</option>`).join("");
+    selectBuildRegion(bld.regions[0] ? bld.regions[0].row : null);
+    renderBuildGrid();
+  }
+  function selectBuildRegion(row) {
+    bld.row = row;
+    $("#bldRegion").value = row == null ? "" : String(row);
+    const r = bldRegion();
+    bld.items = r ? parseBuildList(r.buildings) : [];
+    bld.orig = new Map(bld.items.map((x) => [x.name, x.n]));
+    renderBuildList();
+  }
+  function renderBuildList() {
+    const list = $("#bldList");
+    list.innerHTML = "";
+    const shown = bld.items.filter((x) => x.n > 0);
+    if (!bldRegion()) list.innerHTML = `<li class="bld__empty">В таблице нет регионов.</li>`;
+    else if (!shown.length) list.innerHTML = `<li class="bld__empty">Пока ничего не построено — выберите здание ниже.</li>`;
+    for (const it of shown) {
+      const li = document.createElement("li");
+      if (it.n !== (bld.orig.get(it.name) || 0)) li.classList.add("is-new");
+      li.appendChild(iconCanvas(it.name));
+      const built = bld.built[it.name];
+      li.insertAdjacentHTML("beforeend", `<span class="bld__name">${esc(it.name)}<small>${it.lib ? (built !== undefined ? `в «Стройках»: ${fmt(built)}` : "") : VB.findBuilding(it.name) ? `значок «${esc(VB.findBuilding(it.name).name)}»` : "нет в библиотеке — простой значок"}</small></span>
+        <span class="bld__n"><button type="button" data-bminus="${esc(it.name)}" aria-label="Убрать одно: ${esc(it.name)}">−</button><output>${it.n}</output><button type="button" data-bplus="${esc(it.name)}" aria-label="Добавить ещё: ${esc(it.name)}">+</button></span>`);
+      list.appendChild(li);
+    }
+    const dirty = bldDirty();
+    $("#bldSave").disabled = !dirty || bld.busy; $("#bldReset").disabled = !dirty || bld.busy;
+  }
+  function renderBuildGrid() {
+    const q = $("#bldSearch").value.trim().toLowerCase().replace(/ё/g, "е"), cat = $("#bldCat").value;
+    const grid = $("#bldGrid");
+    grid.innerHTML = "";
+    for (const b of VB.LIBRARY) {
+      if (cat && b.cat !== cat) continue;
+      if (q && !b.name.toLowerCase().replace(/ё/g, "е").includes(q)) continue;
+      const card = document.createElement("button");
+      card.type = "button"; card.className = "bld__card"; card.dataset.badd = b.name; card.title = `Добавить «${b.name}» в регион`;
+      card.appendChild(iconCanvas(b.name));
+      card.insertAdjacentHTML("beforeend", `<span>${esc(b.name)}</span><small>${esc(VB.CATS[b.cat])}</small>`);
+      grid.appendChild(card);
+    }
+    if (!grid.children.length) grid.innerHTML = `<p class="muted">Ничего не нашлось.</p>`;
+  }
+  function changeBuilding(name, d) {
+    if (!bldRegion()) return;
+    let it = bld.items.find((x) => x.name === name);
+    if (!it) { it = { name, n: 0, lib: !!VB.findBuilding(name, true) }; bld.items.push(it); }
+    it.n = Math.max(0, Math.min(99, it.n + d));
+    renderBuildList();
+  }
+  $("#buildBtn").addEventListener("click", () => openBuildings());
+  $("#buildClose").addEventListener("click", () => {
+    if (bldDirty() && !confirm("Изменения не записаны в таблицу. Закрыть без записи?")) return;
+    $("#buildDialog").close();
+  });
+  $("#bldState").addEventListener("change", (e) => {
+    if (bldDirty() && !confirm("Изменения в этом регионе не записаны. Перейти без записи?")) { e.target.value = bld.stateId; return; }
+    loadBuildState(e.target.value);
+  });
+  $("#bldRegion").addEventListener("change", (e) => {
+    if (bldDirty() && !confirm("Изменения в этом регионе не записаны. Перейти без записи?")) { e.target.value = String(bld.row); return; }
+    selectBuildRegion(Number(e.target.value));
+  });
+  $("#bldSearch").addEventListener("input", renderBuildGrid);
+  $("#bldCat").addEventListener("change", renderBuildGrid);
+  $("#bldGrid").addEventListener("click", (e) => { const c = e.target.closest("[data-badd]"); if (c) changeBuilding(c.dataset.badd, 1); });
+  $("#bldList").addEventListener("click", (e) => {
+    const p = e.target.closest("[data-bplus]"), m = e.target.closest("[data-bminus]");
+    if (p) changeBuilding(p.dataset.bplus, 1);
+    if (m) changeBuilding(m.dataset.bminus, -1);
+  });
+  $("#bldReset").addEventListener("click", () => selectBuildRegion(bld.row));
+  $("#bldStyle").addEventListener("change", async (e) => {
+    const style = e.target.value, s = state.byId.get(bld.stateId), prev = bld.style;
+    bld.style = style; renderBuildList(); renderBuildGrid();
+    try {
+      if (!DEMO) await api.admin("adminSetStyle", { stateId: bld.stateId, style });
+      if (s) s.style = style;
+      paintTerritories();
+      bldMsg(`Стиль «${VB.STYLES[style]}»: города и постройки государства на карте перерисованы.`);
+    } catch (err) { bld.style = prev; e.target.value = prev; renderBuildList(); renderBuildGrid(); bldMsg(err.message, true); }
+  });
+  $("#bldSave").addEventListener("click", async () => {
+    const r = bldRegion();
+    if (!r || !bldDirty()) return;
+    const text = buildText(bld.items), delta = {};
+    if ($("#bldCount").checked) for (const it of bld.items) { const d = it.n - (bld.orig.get(it.name) || 0); if (d && it.lib) delta[it.name] = d; }
+    bld.busy = true; renderBuildList();
+    bldMsg("Записываю в таблицу…");
+    try {
+      if (DEMO) {
+        r.buildings = text;
+        const led = state.demoLedgers.get(bld.stateId), s = state.byId.get(bld.stateId);
+        const reg = led && led.regions.find((x) => x.name === r.name), list = text ? text.split(", ") : [];
+        if (reg) reg.buildings = list;
+        const pr = s && s.public && s.public.provinces && s.public.provinces.find((x) => x.name === r.name);
+        if (pr) pr.buildings = list;
+        paintTerritories();
+        bldMsg("Демо-режим: на карте обновлено, в таблицу не записано.");
+      } else {
+        const res = await api.admin("adminWriteBuildings", { stateId: bld.stateId, row: r.row, name: r.name, buildings: text, built: delta });
+        if (res.regions) bld.regions = res.regions;
+        if (res.built) bld.built = res.built;
+        const s = state.byId.get(bld.stateId);
+        if (s && res.public) { s.public = res.public; paintTerritories(); }
+        state.ledgers.delete(bld.stateId);
+        if (state.selected === bld.stateId) renderPanel(s, { keepScroll: true });
+        bldMsg(res.warning || `Записано: «${r.name}» — ${text || "без построек"}. На карте обновлено.`, !!res.warning);
+      }
+    } catch (err) { bldMsg(err.message, true); bld.busy = false; renderBuildList(); return; }
+    bld.busy = false;
+    selectBuildRegion(r.row);
   });
 
   /* ---------------- вкладка «Ход» ---------------- */

@@ -100,6 +100,9 @@ async function handlePost(body, env, ctx, request) {
     case "adminStatUndo": await requireAdmin(env, body.token); return adminStatUndo(env, ctx, body.editId, body.force);
     case "adminTurnHistory": await requireAdmin(env, body.token); return adminTurnHistory(env, ctx);
     case "adminTurnUndo": await requireAdmin(env, body.token); return adminTurnUndo(env, ctx, body.stateIds);
+    case "adminReadBuildings": await requireAdmin(env, body.token); return adminReadBuildings(env, body.stateId);
+    case "adminWriteBuildings": await requireAdmin(env, body.token); return adminWriteBuildings(env, body.stateId, body);
+    case "adminSetStyle": await requireAdmin(env, body.token); return adminSetStyle(env, body.stateId, body.style);
     default: throw new HttpError("Неизвестное действие");
   }
 }
@@ -1435,11 +1438,12 @@ async function adminFreeze(env, ctx, stateId, frozen) {
 }
 
 // Публичный ответ + отметка заморозки (номер хода, на котором государство остановилось).
+// Заморозка и стиль построек на карте — к публичным данным каждого государства.
 async function withFreeze(env, payload) {
-  const orders = await ordersById(env).catch(() => new Map());
+  const [orders, styles] = await Promise.all([ordersById(env).catch(() => new Map()), buildingStyles(env).catch(() => ({}))]);
   return { ...payload, states: payload.states.map((s) => {
     const o = orders.get(s.id);
-    return { ...s, frozen: o && o.frozen ? o.frozen_turn : null };
+    return { ...s, frozen: o && o.frozen ? o.frozen_turn : null, style: styles[s.id] || DEFAULT_STYLE };
   }) };
 }
 
@@ -1453,4 +1457,82 @@ async function privatePayload(env, ctx, token) {
     return { id: s.id, crises: (s.ledger && s.ledger.crises) || [], misses: o.misses, frozen: !!o.frozen, freezeAfter: FREEZE_AFTER };
   });
   return { ok: true, states };
+}
+
+/* ============================================================
+ * ПОСТРОЙКИ РЕГИОНОВ И СТИЛЬ ПОСТРОЕК
+ * Постройки региона — текст колонки R листа «Регионы» («Ферма x3, Портал»): по нему на карте рисуются значки.
+ * Вкладка «Постройки» меняет этот текст и, по желанию, «Построено» (колонка K) на листе «Стройки»,
+ * от которого зависят бонусы зданий. Стиль рисунков (западный, славянский, азиатский) — на государство,
+ * хранится в settings.building_styles как {stateId: style}.
+ * ============================================================ */
+const STYLES = ["west", "slav", "east"];
+const DEFAULT_STYLE = "west";
+
+async function buildingStyles(env) {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'building_styles'").first();
+  try { const o = r ? JSON.parse(r.value) : {}; return o && typeof o === "object" ? o : {}; } catch { return {}; }
+}
+
+async function adminSetStyle(env, stateId, style) {
+  if (!STYLES.includes(style)) return { ok: false, error: "Неизвестный стиль." };
+  await stateRow(env, stateId);
+  const styles = await buildingStyles(env);
+  styles[String(stateId)] = style;
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('building_styles', ?1) ON CONFLICT(key) DO UPDATE SET value=?1").bind(JSON.stringify(styles)).run();
+  return { ok: true, style };
+}
+
+const BUILT_RANGE = "'Стройки'!B1:K250";
+
+// Регионы с постройками и «Построено» по названию здания с листа «Стройки».
+async function readBuildings(env, r) {
+  const qs = ["'Регионы'!A4:R21", BUILT_RANGE].map((x) => "ranges=" + encodeURIComponent(x)).join("&");
+  const data = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`);
+  const [reg, bld] = data.valueRanges.map((x) => x.values || []);
+  const regions = [];
+  reg.forEach((row, i) => { if (String(row[0] || "").trim()) regions.push({ row: 4 + i, name: String(row[0]), type: String(row[1] || ""), buildings: String(row[17] || "") }); });
+  const built = {}, rowOf = {};
+  bld.forEach((row, i) => {
+    const name = String(row[0] || "").trim(), k = row[9];
+    if (!name || name in rowOf || (typeof k !== "number" && !/^\d+$/.test(String(k ?? "").trim()))) return;
+    built[name] = Number(k) || 0; rowOf[name] = i + 1;
+  });
+  return { regions, built, rowOf };
+}
+
+async function adminReadBuildings(env, stateId) {
+  const r = await stateRow(env, stateId);
+  const [{ regions, built }, styles] = await Promise.all([readBuildings(env, r), buildingStyles(env)]);
+  return { ok: true, regions, built, style: styles[r.id] || DEFAULT_STYLE };
+}
+
+// body: { row, name — регион (строка и название, чтобы не записать в чужую строку), buildings — новый текст колонки R,
+//         built — {здание: на сколько изменить «Построено»} или ничего }
+async function adminWriteBuildings(env, stateId, body) {
+  const r = await stateRow(env, stateId);
+  const row = Number(body.row);
+  if (!(row >= 4 && row <= 21)) return { ok: false, error: "Неверная строка региона." };
+  const before = await readInputs(env, r);
+  const reg = before.inputs.regions.find((g) => g.row === row);
+  if (!reg || reg.name !== String(body.name || "")) return { ok: false, error: "Регионы в таблице изменились. Откройте вкладку заново." };
+  const text = String(body.buildings || "").replace(/\s+/g, " ").trim().slice(0, 500);
+  const data = [{ range: `'Регионы'!R${row}`, values: [[text]] }];
+  const notFound = [];
+  const delta = body.built && typeof body.built === "object" ? Object.entries(body.built).filter(([, d]) => Number.isFinite(Number(d)) && Number(d)) : [];
+  if (delta.length) {
+    const { built, rowOf } = await readBuildings(env, r);
+    for (const [name, d] of delta) {
+      if (!rowOf[name]) { notFound.push(name); continue; }
+      data.push({ range: `'Стройки'!K${rowOf[name]}`, values: [[Math.max(0, (built[name] || 0) + Math.round(Number(d)))]] });
+    }
+  }
+  await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
+  const after = await readInputs(env, r).catch(() => null);
+  if (after) await logStatEdit(env, r.id, ["regions"], before, after, 0).catch((e) => console.error(e));
+  const snap = await refreshOneState(env, r.id);
+  const s = snap.states.find((x) => x.id === r.id);
+  const fresh = await readBuildings(env, r).catch(() => null);
+  return { ok: true, public: s && s.public, regions: fresh && fresh.regions, built: fresh && fresh.built,
+    warning: notFound.length ? `На листе «Стройки» нет: ${notFound.join(", ")} — «Построено» для них не изменено.` : undefined };
 }
