@@ -87,3 +87,13 @@ CREATE TABLE IF NOT EXISTS stat_edits (
   undone  TEXT NOT NULL DEFAULT ''      -- когда правку откатили
 );
 CREATE INDEX IF NOT EXISTS stat_edits_state ON stat_edits (state_id, id);
+
+-- Снимок цифр: по строке на государство (data — всё собранное из таблицы, public — то, что видно всем).
+-- Сервер создаёт её сам; время последнего полного сбора — settings._snap_updated.
+CREATE TABLE IF NOT EXISTS snapshot_states (
+  state_id TEXT PRIMARY KEY,
+  data     TEXT NOT NULL,
+  public   TEXT NOT NULL,
+  turn     INTEGER NOT NULL DEFAULT 0,
+  updated  TEXT NOT NULL
+);
