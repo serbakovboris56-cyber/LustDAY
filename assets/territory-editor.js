@@ -4,6 +4,8 @@
  * Чтобы заливка ложилась на сушу без дыр: прибрежные клетки (суши меньше половины) тоже красятся,
  * мелкие пропуски у берега и замкнутые дыры внутри государства заполняются сами, а контур выходит
  * на клетку в море — на карте территория обрезается по берегу, так что заливка доходит до самой кромки.
+ * Режим «Провинции» делит территорию государства на его регионы (названия берутся из таблицы): всё, что не
+ * раскрашено, считается первой провинцией (столицей). Между провинциями на карте рисуется пунктир.
  */
 (function () {
   "use strict";
@@ -146,6 +148,79 @@
     return polys.length ? { type: "MultiPolygon", coordinates: polys } : null;
   }
 
+  // Палитра предпросмотра провинций: заметно разные цвета, чтобы соседние провинции не сливались
+  const PROV_COLORS = ["#FFD700", "#E4572E", "#4CB5F5", "#7BC950", "#B07CC6", "#F29E4C", "#EF476F", "#2EC4B6", "#C9ADA7", "#8D99AE", "#F15BB5", "#9BC53D"];
+
+  // Провинция клетки: 0 (не раскрашено) — первая провинция государства
+  const provOf = (prov, i) => prov[i] || 1;
+
+  /* Линии между провинциями одного государства: контур каждой провинции, из которого оставлены только участки,
+   * где по другую сторону — другая провинция того же государства (каждая общая граница берётся один раз).
+   * Возвращает { lines: [[[x, y], …], …], labels: [{name, x, y}] } в пикселях исходной карты или null. */
+  function provinceLines(owner, prov, idx, names, W, H) {
+    const N = W * H, count = names.length;
+    if (count < 2) return null;
+    const cells = Array.from({ length: count + 1 }, () => []);
+    for (let i = 0; i < N; i++) if (owner[i] === idx) cells[Math.min(count, provOf(prov, i))].push(i);
+    const used = cells.filter((c) => c.length).length;
+    if (used < 2) return null;
+    const cellAt = (x, y) => {
+      const cx = Math.floor(x), cy = Math.floor(y);
+      return cx >= 0 && cy >= 0 && cx < W && cy < H ? cy * W + cx : -1;
+    };
+    const lines = [], labels = [];
+    const values = new Float64Array(N);
+    for (let p = 1; p <= count; p++) {
+      if (!cells[p].length) continue;
+      values.fill(0);
+      for (const i of cells[p]) values[i] = 1;
+      const mp = window.d3.contours().size([W, H]).thresholds([0.5])(values)[0];
+      let best = null;
+      for (const poly of mp.coordinates) {
+        for (const ring of poly) {
+          // участок ring[k] → ring[k+1] — граница с провинцией с бо́льшим номером?
+          const n = ring.length - 1, div = new Uint8Array(n);
+          for (let k = 0; k < n; k++) {
+            const [ax, ay] = ring[k], [bx, by] = ring[k + 1];
+            const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+            const nx = (-dy / len) * 0.5, ny = (dx / len) * 0.5, mx = (ax + bx) / 2, my = (ay + by) / 2;
+            const c1 = cellAt(mx + nx, my + ny), c2 = cellAt(mx - nx, my - ny);
+            const other = c1 >= 0 && owner[c1] === idx && provOf(prov, c1) === p ? c2 : c1;
+            div[k] = other >= 0 && owner[other] === idx && provOf(prov, other) > p ? 1 : 0;
+          }
+          let start = div.indexOf(0);
+          if (start < 0) { lines.push(ring); continue; }           // провинция-анклав целиком внутри другой
+          let run = null;
+          for (let s = 1; s <= n; s++) {
+            const k = (start + s) % n;
+            if (div[k]) { if (!run) run = [ring[k]]; run.push(ring[k + 1]); }
+            else if (run) { lines.push(run); run = null; }
+          }
+          if (run) lines.push(run);
+        }
+        // подпись — в центре самого большого куска провинции
+        const r = poly[0]; let a = 0, cx = 0, cy = 0;
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+          const f = r[j][0] * r[i][1] - r[i][0] * r[j][1];
+          a += f; cx += (r[j][0] + r[i][0]) * f; cy += (r[j][1] + r[i][1]) * f;
+        }
+        if (a && (!best || Math.abs(a) > best.a)) best = { a: Math.abs(a), x: cx / (3 * a), y: cy / (3 * a) };
+      }
+      if (best) {
+        // центр тяжести изогнутой провинции может выпасть наружу — берём её ближайшую клетку
+        let at = cellAt(best.x, best.y);
+        if (at < 0 || owner[at] !== idx || provOf(prov, at) !== p) {
+          let bd = Infinity;
+          for (const i of cells[p]) { const d = (i % W + 0.5 - best.x) ** 2 + (Math.floor(i / W) + 0.5 - best.y) ** 2; if (d < bd) { bd = d; at = i; } }
+          best.x = at % W + 0.5; best.y = Math.floor(at / W) + 0.5;
+        }
+        labels.push({ name: names[p - 1], x: Math.round(best.x * CELL), y: Math.round(best.y * CELL) });
+      }
+    }
+    const out = lines.map((l) => simplify(l, 0.5).map(([x, y]) => [Math.round(x * CELL), Math.round(y * CELL)])).filter((l) => l.length >= 2);
+    return out.length ? { lines: out, labels } : null;
+  }
+
   // Слой с canvas поверх карты, растянутый на её границы (как ImageOverlay, но с canvas).
   const CanvasOverlay = L.ImageOverlay.extend({
     _initImage() {
@@ -160,7 +235,7 @@
 
   /**
    * opts: { map, nativeZ, states: [{id, name, color}], loadGrid(): Promise<grid|null>, borders: GeoJSON,
-   *         save({grid, geometries}): Promise, onClose(saved) }
+   *         loadRegions(stateId): Promise<string[]>, save({grid, geometries, provinces}): Promise, onClose(saved) }
    */
   async function open(opts) {
     const { map, nativeZ } = opts;
@@ -179,11 +254,19 @@
     // владельцы: индекс 1..n -> id государства
     let owners = opts.states.map((s) => s.id);
     let owner = new Uint8Array(W * H);
+    // провинции: номер в списке названий государства (1..n), 0 — не раскрашено, то есть первая провинция
+    const prov = new Uint8Array(W * H);
+    const provNames = new Map();
     const saved = await opts.loadGrid().catch(() => null);
     if (saved && saved.w === W && saved.h === H && Array.isArray(saved.rle)) {
       const old = unrle(saved.rle, W * H);
       const remap = saved.owners.map((id) => owners.indexOf(id) + 1);    // государство могли удалить
       for (let i = 0; i < old.length; i++) if (old[i]) owner[i] = remap[old[i] - 1] || 0;
+      if (saved.prov && Array.isArray(saved.prov.rle)) {
+        const oldProv = unrle(saved.prov.rle, W * H);
+        for (let i = 0; i < oldProv.length; i++) if (owner[i]) prov[i] = oldProv[i];
+        Object.entries(saved.prov.names || {}).forEach(([id, names]) => { if (owners.includes(id) && Array.isArray(names)) provNames.set(id, names.map(String)); });
+      }
     } else if (opts.borders && opts.borders.features.length) {
       // сетки ещё нет — переводим существующие границы в клетки
       const c = document.createElement("canvas"); c.width = W; c.height = H;
@@ -208,25 +291,88 @@
     const cctx = canvas.getContext("2d");
     const img = cctx.createImageData(W, H);
     const colors = [[0, 0, 0]].concat(opts.states.map((s) => hexToRgb(s.color)));
+    const provColors = PROV_COLORS.map(hexToRgb);
+    let current = 1, mode = "brush", radius = Number(ui.querySelector("#brushSize").value) || 6, currentProv = 1;
     function paintCell(i) {
       const o = owner[i], j = i * 4;
-      if (o) { const c = colors[o]; img.data[j] = c[0]; img.data[j + 1] = c[1]; img.data[j + 2] = c[2]; img.data[j + 3] = 150; }
-      else img.data[j + 3] = 0;
+      if (!o) { img.data[j + 3] = 0; return; }
+      // в режиме провинций выбранное государство раскрашено по провинциям, остальные приглушены
+      const own = mode === "prov" && o === current;
+      const c = own ? provColors[(provOf(prov, i) - 1) % provColors.length] : colors[o];
+      img.data[j] = c[0]; img.data[j + 1] = c[1]; img.data[j + 2] = c[2];
+      img.data[j + 3] = mode !== "prov" ? 150 : own ? 170 : 50;
     }
-    for (let i = 0; i < W * H; i++) paintCell(i);
-    cctx.putImageData(img, 0, 0);
+    function repaint() { for (let i = 0; i < W * H; i++) paintCell(i); cctx.putImageData(img, 0, 0); }
+    repaint();
     const toLL = (x, y) => map.unproject([x, y], nativeZ);
     const overlay = new CanvasOverlay(canvas, L.latLngBounds(toLL(0, H * CELL), toLL(W * CELL, 0)), { opacity: 1, interactive: false }).addTo(map);
 
     // элементы управления
+    const escHtml = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
     const sel = ui.querySelector("#brushState");
-    sel.innerHTML = opts.states.map((s, i) => `<option value="${i + 1}">${s.name.replace(/</g, "&lt;")}</option>`).join("");
-    let current = 1, mode = "brush", radius = Number(ui.querySelector("#brushSize").value) || 6;
-    sel.onchange = () => { current = Number(sel.value); };
+    sel.innerHTML = opts.states.map((s, i) => `<option value="${i + 1}">${escHtml(s.name)}</option>`).join("");
+    const provSel = ui.querySelector("#brushProv"), provField = ui.querySelector("#brushProvField");
+    const regionsLoaded = new Set();
+
+    // Названия провинций: регионы из таблицы государства, затем сохранённые раньше, которых в таблице уже нет
+    // (их клетки не теряются, пока админ их не перекрасит). Номера клеток переводятся на новый список.
+    function mergeNames(id, fromTable) {
+      const idx = owners.indexOf(id) + 1;
+      const old = provNames.get(id) || [];
+      const names = fromTable.slice();
+      const has = new Uint8Array(old.length + 1);
+      for (let i = 0; i < prov.length; i++) if (owner[i] === idx && prov[i]) has[Math.min(old.length, prov[i])] = 1;
+      old.forEach((n, k) => { if (has[k + 1] && !names.includes(n)) names.push(n); });
+      if (!names.length) names.push(old[0] || "Столица");
+      const remap = old.map((n) => names.indexOf(n) + 1);
+      for (let i = 0; i < prov.length; i++) if (owner[i] === idx && prov[i]) prov[i] = remap[prov[i] - 1] || 0;
+      provNames.set(id, names);
+    }
+    function fillProvSelect() {
+      const id = owners[current - 1], names = provNames.get(id) || ["Столица"];
+      if (currentProv > names.length) currentProv = 1;
+      provSel.innerHTML = names.map((n, k) => `<option value="${k + 1}">${escHtml(n)}${k ? "" : " (всё нераскрашенное)"}</option>`).join("")
+        + `<option value="new">+ Новая провинция…</option>`;
+      provSel.value = String(currentProv);
+    }
+    async function enterProvinces() {
+      const id = owners[current - 1];
+      if (!id) return;
+      if (!regionsLoaded.has(id)) {
+        msg("Читаю регионы государства из таблицы…");
+        let names = [];
+        try { names = (await opts.loadRegions(id)) || []; } catch (err) { msg("Регионы из таблицы не прочитались (" + err.message + "), можно добавить провинции вручную.", true); }
+        regionsLoaded.add(id);
+        mergeNames(id, names.map((n) => String(n).trim()).filter(Boolean));
+        if (mode !== "prov" || owners[current - 1] !== id) return;
+      }
+      currentProv = 1;
+      fillProvSelect();
+      repaint();
+      const names = provNames.get(id);
+      msg(names.length < 2
+        ? "У государства один регион. Добавьте регионы в таблице («Статистика» в «Управлении») или «+ Новая провинция»."
+        : `Выберите провинцию и красьте внутри территории. Всё нераскрашенное — «${names[0]}». Между провинциями на карте будет пунктир.`);
+    }
+    sel.onchange = () => { current = Number(sel.value); if (mode === "prov") enterProvinces(); };
+    provSel.onchange = () => {
+      if (provSel.value !== "new") { currentProv = Number(provSel.value); return; }
+      const id = owners[current - 1], names = provNames.get(id) || ["Столица"];
+      const name = (prompt("Название новой провинции") || "").trim();
+      if (name && !names.includes(name)) {
+        if (names.length >= 250) { msg("Слишком много провинций.", true); }
+        else { names.push(name); provNames.set(id, names); currentProv = names.length; }
+      } else if (name) currentProv = names.indexOf(name) + 1;
+      fillProvSelect();
+    };
     ui.querySelector("#brushSize").oninput = (e) => { radius = Number(e.target.value); ui.querySelector("#brushSizeOut").textContent = radius; };
     ui.querySelector("#brushSizeOut").textContent = radius;
     const setMode = (m) => {
+      const was = mode;
       mode = m;
+      provField.hidden = m !== "prov";
+      if (m === "prov") enterProvinces();
+      else if (was === "prov") { repaint(); msg("Выберите государство и красьте сушу. Колесо мыши — масштаб, «Рука» — двигать карту."); }
       ui.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
       if (m === "pan") map.dragging.enable(); else map.dragging.disable();
       map.getContainer().style.cursor = m === "pan" ? "" : "crosshair";
@@ -247,14 +393,21 @@
     };
     function stamp(cx, cy) {
       const val = mode === "erase" ? 0 : current;
+      const provMode = mode === "prov";
       const r = radius, x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(W - 1, Math.ceil(cx + r));
       const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(H - 1, Math.ceil(cy + r));
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
         if (dx * dx + dy * dy > r * r) continue;
         const i = y * W + x;
+        if (provMode) {
+          // провинции красятся только внутри территории выбранного государства
+          if (owner[i] !== current || prov[i] === currentProv) continue;
+          prov[i] = currentProv; paintCell(i); dirty = true;
+          continue;
+        }
         if (!land[i] || owner[i] === val) continue;
-        owner[i] = val; paintCell(i); dirty = true;
+        owner[i] = val; prov[i] = 0; paintCell(i); dirty = true;
       }
       cctx.putImageData(img, 0, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
     }
@@ -294,10 +447,14 @@
       try {
         await new Promise((r) => setTimeout(r, 30));
         fillGaps(owner, land, W, H);
-        const geometries = {};
-        owners.forEach((id, i) => { geometries[id] = gridToGeometry(owner, land, i + 1, W, H); });
+        const geometries = {}, provinces = {};
+        owners.forEach((id, i) => {
+          geometries[id] = gridToGeometry(owner, land, i + 1, W, H);
+          provinces[id] = geometries[id] && provNames.has(id) ? provinceLines(owner, prov, i + 1, provNames.get(id), W, H) : null;
+        });
         msg("Сохраняю…");
-        await opts.save({ grid: { w: W, h: H, owners, rle: rle(owner) }, geometries });
+        const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) } };
+        await opts.save({ grid, geometries, provinces });
         dirty = false;
         close(true);
       } catch (err) {

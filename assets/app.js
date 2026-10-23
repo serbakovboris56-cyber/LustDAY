@@ -130,6 +130,15 @@
   // Территории рисует векторный слой; поверх — невидимые фигуры для наведения, клика и подписей.
   let bordersLayer = null;
   const labelsLayer = L.layerGroup().addTo(map);
+  // Названия провинций видны только вблизи, иначе они забивают подписи государств.
+  const provinceLabels = L.layerGroup();
+  const PROVINCE_LABEL_Z = NATIVE_Z - 2;
+  function toggleProvinceLabels() {
+    const show = map.getZoom() >= PROVINCE_LABEL_Z && !window.VPI_EDITING;
+    if (show && !map.hasLayer(provinceLabels)) provinceLabels.addTo(map);
+    else if (!show && map.hasLayer(provinceLabels)) provinceLabels.remove();
+  }
+  map.on("zoomend", toggleProvinceLabels);
   // Точка для подписи: центр тяжести самого большого куска территории.
   function labelPoint(geom) {
     const polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
@@ -157,6 +166,7 @@
     if (!vector) return;
     if (bordersLayer) bordersLayer.remove();
     labelsLayer.clearLayers();
+    provinceLabels.clearLayers();
     state.layers.clear();
     paintTerritories();
     bordersLayer = L.geoJSON(bordersGeo, {
@@ -170,6 +180,11 @@
         const label = words.length > 1 ? `${esc(words.slice(0, -1).join(" "))}<br>${esc(words.at(-1))}` : esc(s.name);
         const at = labelPoint(f.geometry);
         if (at) L.tooltip({ permanent: true, direction: "center", className: "state-label", opacity: 1, interactive: false }).setLatLng(at).setContent(label).addTo(labelsLayer);
+        const pv = f.properties.provinces;
+        (pv && Array.isArray(pv.labels) ? pv.labels : []).forEach((p) => {
+          L.tooltip({ permanent: true, direction: "center", className: "province-label", opacity: 1, interactive: false })
+            .setLatLng(toLatLng(p.x, p.y)).setContent(esc(p.name)).addTo(provinceLabels);
+        });
         layer.on({
           mouseover: () => layer.setStyle({ fillOpacity: 0.08 }),
           mouseout: () => layer.setStyle({ fillOpacity: 0 }),
@@ -177,6 +192,7 @@
         });
       },
     }).addTo(map);
+    toggleProvinceLabels();
   }
 
   map.on("click", () => { if (state.selected && !window.VPI_EDITING) closePanel(); });
@@ -969,14 +985,22 @@
     vector.setTerritories([], () => null);          // на время правки старые границы прячем
     if (bordersLayer) bordersLayer.remove();
     labelsLayer.clearLayers();
+    provinceLabels.clearLayers();
     window.VPITerritoryEditor.open({
       map, nativeZ: NATIVE_Z,
       states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
-      save: async ({ grid, geometries }) => {
-        if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries });
-        bordersGeo = { type: "FeatureCollection", features: Object.entries(geometries).filter(([, g]) => g).map(([id, geometry]) => ({ type: "Feature", properties: { id }, geometry })) };
+      // провинции — это регионы из таблицы государства
+      loadRegions: async (id) => {
+        const led = state.ledgers.get(id) || await api.ledger(id);
+        state.ledgers.set(id, led);
+        return ((led && led.regions) || []).map((r) => r.name);
+      },
+      save: async ({ grid, geometries, provinces }) => {
+        if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries, provinces });
+        bordersGeo = { type: "FeatureCollection", features: Object.entries(geometries).filter(([, g]) => g)
+          .map(([id, geometry]) => ({ type: "Feature", properties: provinces[id] ? { id, provinces: provinces[id] } : { id }, geometry })) };
       },
       onClose: () => {
         window.VPI_EDITING = false;

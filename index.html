@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261023">
+<link rel="stylesheet" href="assets/app.css?v=20261023-2">
 </head>
 <body>
 <header class="bar">
@@ -42,8 +42,10 @@
     <div class="brush__modes">
       <button type="button" class="btn btn--ghost" data-mode="brush" aria-pressed="true">Кисть</button>
       <button type="button" class="btn btn--ghost" data-mode="erase" aria-pressed="false">Ластик</button>
+      <button type="button" class="btn btn--ghost" data-mode="prov" aria-pressed="false">Провинции</button>
       <button type="button" class="btn btn--ghost" data-mode="pan" aria-pressed="false">Рука</button>
     </div>
+    <label class="brush__field" id="brushProvField" hidden>Провинция <select id="brushProv"></select></label>
     <label class="brush__field">Размер <input id="brushSize" type="range" min="1" max="40" value="6"> <output id="brushSizeOut">6</output></label>
     <div class="brush__actions">
       <button type="button" class="btn btn--ghost" id="brushCancel">Отмена</button>
@@ -204,10 +206,10 @@
   </form>
 </dialog>
 
-<script src="assets/config.js?v=20261023"></script>
+<script src="assets/config.js?v=20261023-2"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
-<script src="assets/vector-map.js?v=20261023"></script>
-<script src="assets/territory-editor.js?v=20261023"></script>
-<script src="assets/app.js?v=20261023"></script>
+<script src="assets/vector-map.js?v=20261023-2"></script>
+<script src="assets/territory-editor.js?v=20261023-2"></script>
+<script src="assets/app.js?v=20261023-2"></script>
 </body>
 </html>

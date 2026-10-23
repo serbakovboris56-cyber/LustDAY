@@ -159,6 +159,15 @@
       for (const t of visible) {
         ctx.strokeStyle = t.color; ctx.lineWidth = (t.selected ? 3 : 2) / k; ctx.stroke(t.p);
       }
+      // границы провинций внутри государств — пунктиром того же цвета (шаг пунктира в пикселях экрана)
+      // тёмная подложка под штрихами, чтобы пунктир читался и на горах, и на светлых биомах
+      ctx.setLineDash([8 / k, 5 / k]); ctx.lineCap = "butt";
+      for (const t of territories) {
+        if (!t.provLines || !hit(t.provBox, view)) continue;
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.55)"; ctx.lineWidth = (t.selected ? 3.6 : 3) / k; ctx.stroke(t.provLines);
+        ctx.strokeStyle = t.color; ctx.lineWidth = (t.selected ? 2 : 1.6) / k; ctx.stroke(t.provLines);
+      }
+      ctx.setLineDash([]);
       ctx.restore();
 
       const lakes = pathFor(D.lakes, view);
@@ -179,7 +188,10 @@
           const g = f.geometry, polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
           const rings = polys.flat().map((r) => ({ b: bboxOf(r), r }));
           const i = info(f.properties.id) || {};
-          return { id: f.properties.id, color: i.color || "#FFD700", selected: !!i.selected, rings };
+          const pv = f.properties.provinces, lines = pv && Array.isArray(pv.lines) ? pv.lines.filter((l) => l.length >= 2) : [];
+          const provLines = lines.length ? new Path2D() : null;
+          lines.forEach((l) => provLines.addPath(linePath(l)));
+          return { id: f.properties.id, color: i.color || "#FFD700", selected: !!i.selected, rings, provLines, provBox: lines.length ? bboxOf(lines.flat()) : null };
         }).filter((t) => t.rings.length);
         layer.redraw();
       },

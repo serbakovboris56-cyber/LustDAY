@@ -84,6 +84,15 @@ button { font: inherit; color: inherit; }
   pointer-events: none;
 }
 .state-label::before { display: none; }
+/* названия провинций — мельче и тише названий государств, видны только вблизи */
+.province-label {
+  background: none; border: 0; box-shadow: none; padding: 0;
+  color: var(--gold-soft);
+  font: italic 400 13px/1.1 var(--serif);
+  text-align: center; white-space: nowrap;
+  text-shadow: 0 0 3px #000, 0 0 6px #000;
+}
+.province-label::before { display: none; }
 
 /* ---------- roster ---------- */
 .roster {
@@ -332,6 +341,7 @@ button { font: inherit; color: inherit; }
   max-width: calc(100% - 24px);
 }
 .brush[hidden] { display: none; }
+.brush__field[hidden] { display: none; }
 .brush__field { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--gold-soft); }
 .brush select { background: var(--banner); color: var(--gold); border: 1px solid var(--rule); padding: 6px 8px; font: inherit; }
 .brush input[type="range"] { accent-color: var(--gold); width: 120px; }

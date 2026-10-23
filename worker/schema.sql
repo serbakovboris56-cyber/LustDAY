@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS borders (
   updated  TEXT NOT NULL
 );
 
+-- Провинции (регионы) внутри государства: {lines: пунктир между ними, labels: [{name, x, y}]} в пикселях карты
+CREATE TABLE IF NOT EXISTS provinces (
+  state_id TEXT PRIMARY KEY,
+  data     TEXT NOT NULL,
+  updated  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
