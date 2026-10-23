@@ -75,7 +75,12 @@
     async publicData() {
       if (!DEMO) return getJSON(`${API}?action=public`);
       const d = await getJSON("data/states.json");
-      d.states.forEach((s) => { state.demoLedgers.set(s.id, s.ledger); delete s.ledger; });
+      d.states.forEach((s) => {
+        state.demoLedgers.set(s.id, s.ledger);
+        // как у сервера: население и постройки провинций публичны (по ним рисуются города)
+        if (s.ledger && !s.public.provinces) s.public.provinces = s.ledger.regions.map(({ name, type, population, buildings }) => ({ name, type, population, buildings }));
+        delete s.ledger;
+      });
       return d;
     },
     async borders() {
@@ -114,6 +119,7 @@
 
   map.attributionControl.addAttribution("Карта мира ВПИ");
   let vector = null;           // векторная карта (assets/vector-map.js)
+  let mountains = [];          // значки гор из map.json: дороги к деревням обходят горы
   let bordersGeo = { type: "FeatureCollection", features: [] };
 
   function fitWorld() {
@@ -169,7 +175,7 @@
     if (!vector) return;
     vector.setTerritories(bordersGeo.features, (id) => {
       const s = state.byId.get(id);
-      return s ? { color: s.color, selected: state.selected === id } : null;
+      return s ? { color: s.color, selected: state.selected === id, regions: (s.public && s.public.provinces) || null } : null;
     });
   }
   function addBorders(geo) {
@@ -189,12 +195,21 @@
         state.layers.set(s.id, layer);
         const words = s.name.split(" ");
         const label = words.length > 1 ? `${esc(words.slice(0, -1).join(" "))}<br>${esc(words.at(-1))}` : esc(s.name);
-        const at = labelPoint(f.geometry);
-        if (at) L.tooltip({ permanent: true, direction: "center", className: "state-label", opacity: 1, interactive: false }).setLatLng(at).setContent(label).addTo(labelsLayer);
         const pv = f.properties.provinces;
+        const at = labelPoint(f.geometry);
+        if (at) {
+          // название государства не закрывает город: если город рядом с серединой, подпись встаёт под ним
+          const c = map.project(at, NATIVE_Z), near = (pv && Array.isArray(pv.towns) ? pv.towns : []).find((t) => Math.hypot(t.x - c.x, t.y - c.y) < 260);
+          const hasProvLabel = near && pv.labels && pv.labels.some((p) => p.name === near.name);
+          L.tooltip({ permanent: true, direction: near ? "bottom" : "center", offset: near ? [0, hasProvLabel ? 26 : 6] : [0, 0], className: "state-label", opacity: 1, interactive: false })
+            .setLatLng(near ? toLatLng(near.x, near.y) : at).setContent(label).addTo(labelsLayer);
+        }
+        // название провинции — под её городом, если город есть, иначе в середине провинции
+        const towns = pv && Array.isArray(pv.towns) ? pv.towns : [];
         (pv && Array.isArray(pv.labels) ? pv.labels : []).forEach((p) => {
-          L.tooltip({ permanent: true, direction: "center", className: "province-label", opacity: 1, interactive: false })
-            .setLatLng(toLatLng(p.x, p.y)).setContent(esc(p.name)).addTo(provinceLabels);
+          const t = towns.find((x) => x.name === p.name);
+          L.tooltip({ permanent: true, direction: t ? "bottom" : "center", offset: t ? [0, 2] : [0, 0], className: "province-label", opacity: 1, interactive: false })
+            .setLatLng(t ? toLatLng(t.x, t.y) : toLatLng(p.x, p.y)).setContent(esc(p.name)).addTo(provinceLabels);
         });
         layer.on({
           mouseover: () => layer.setStyle({ fillOpacity: 0.08 }),
@@ -207,6 +222,26 @@
   }
 
   map.on("click", () => { if (state.selected && !window.VPI_EDITING) closePanel(); });
+
+  // Подсказка над городом: провинция, размер, население и постройки
+  const townTip = L.tooltip({ direction: "top", offset: [0, -26], className: "town-tip", opacity: 1, interactive: false });
+  let tipFrame = 0, tipEvent = null;
+  map.on("mousemove", (e) => {
+    tipEvent = e;
+    if (tipFrame) return;
+    tipFrame = requestAnimationFrame(() => {
+      tipFrame = 0;
+      if (!vector || window.VPI_EDITING) { townTip.remove(); return; }
+      const p = map.project(tipEvent.latlng, NATIVE_Z), k = Math.pow(2, map.getZoom() - NATIVE_Z);
+      const t = vector.townAt(p.x, p.y, k);
+      if (!t) { townTip.remove(); map.getContainer().classList.remove("is-town"); return; }
+      const b = t.buildings.length ? `<div class="town-tip__b">${t.buildings.map(esc).join(", ")}</div>` : "";
+      townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${t.capital ? "Столица, " : ""}${esc(t.tier.toLowerCase())}${t.pop ? ` · ${fmt(t.pop)} жителей` : ""}</div>${b}`);
+      if (!map.hasLayer(townTip)) townTip.addTo(map);
+      map.getContainer().classList.add("is-town");
+    });
+  });
+  map.on("mouseout zoomstart", () => { townTip.remove(); });
 
   /* ---------------- roster ---------------- */
   function renderRoster() {
@@ -1267,7 +1302,7 @@
     labelsLayer.clearLayers();
     provinceLabels.clearLayers();
     window.VPITerritoryEditor.open({
-      map, nativeZ: NATIVE_Z,
+      map, nativeZ: NATIVE_Z, mountains,
       states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
@@ -1306,6 +1341,7 @@
     renewSession();
     const mapReady = getJSON("assets/map.json").then((mapData) => {
       vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
+      mountains = mapData.mountains || [];
     }).catch((err) => console.error("Карта не загрузилась", err));
     const geoReady = api.borders().catch((err) => { console.error("Границы не загрузились", err); return null; });
     try {

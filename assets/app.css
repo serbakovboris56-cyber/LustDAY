@@ -429,3 +429,14 @@ button { font: inherit; color: inherit; }
 .crisis__note { margin-top: 4px; font-size: 12px; color: var(--gold-soft); }
 .turn__frozen td { color: var(--gold-soft); }
 #previewDialog .login__actions { flex-wrap: wrap; gap: 8px 20px; }
+
+/* ---------- подсказка над городом ---------- */
+.town-tip {
+  background: var(--ink); color: var(--gold);
+  border: 1px solid var(--gold); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  font: 13px/1.35 var(--sans); padding: 6px 9px; width: max-content; max-width: 260px; white-space: normal;
+}
+.town-tip b { color: var(--gold); font: 700 15px/1.2 var(--serif); }
+.town-tip__b { margin-top: 3px; color: var(--gold-soft); font-size: 12px; }
+.town-tip::before { border-top-color: var(--gold); }
+.leaflet-container.is-town { cursor: help; }

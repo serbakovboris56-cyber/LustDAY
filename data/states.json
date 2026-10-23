@@ -12,40 +12,40 @@
    "capital": "Арнбург",
    "pantheon": "Пресветлый Сонм",
    "public": {
-    "population": 18760,
+    "population": 79000,
     "regions": 3,
     "army": 300
    },
    "ledger": {
     "turn": 3,
     "year": 1203,
-    "population": 18760,
-    "popGrowth": 188,
+    "population": 79000,
+    "popGrowth": 792,
     "popPct": 1.0,
     "estates": [
      {
       "name": "Крестьяне",
-      "count": 14000,
+      "count": 58955,
       "loyalty": 62
      },
      {
       "name": "Ремесленники",
-      "count": 3000,
+      "count": 12633,
       "loyalty": 70
      },
      {
       "name": "Торговцы",
-      "count": 900,
+      "count": 3790,
       "loyalty": 58
      },
      {
       "name": "Священники",
-      "count": 700,
+      "count": 2948,
       "loyalty": 81
      },
      {
       "name": "Феодалы",
-      "count": 160,
+      "count": 674,
       "loyalty": 74
      }
     ],
@@ -125,13 +125,14 @@
      {
       "name": "Арнбург",
       "type": "Столица",
-      "population": 9800,
+      "population": 52000,
       "loyalty": 74,
-      "food": 15400,
-      "craft": 180,
-      "trade": 520,
+      "food": 81714,
+      "craft": 955,
+      "trade": 2759,
       "buildings": [
-       "Ратуша",
+       "Замок",
+       "Ферма x3",
        "Храм",
        "Рынок",
        "Казармы"
@@ -140,26 +141,27 @@
      {
       "name": "Долина Ведры",
       "type": "Город",
-      "population": 5600,
+      "population": 18000,
       "loyalty": 64,
-      "food": 9900,
-      "craft": 80,
-      "trade": 250,
+      "food": 31821,
+      "craft": 257,
+      "trade": 804,
       "buildings": [
        "Мельница",
-       "Ферма"
+       "Ферма x2"
       ]
      },
      {
       "name": "Каменный кряж",
       "type": "Крепость",
-      "population": 3360,
+      "population": 9000,
       "loyalty": 57,
-      "food": 5500,
-      "craft": 40,
-      "trade": 130,
+      "food": 14732,
+      "craft": 107,
+      "trade": 348,
       "buildings": [
-       "Стены"
+       "Стены",
+       "Кузница"
       ]
      }
     ],
@@ -180,40 +182,40 @@
    "capital": "Вельмар",
    "pantheon": "Храм Тихой Луны",
    "public": {
-    "population": 14230,
+    "population": 146000,
     "regions": 2,
     "army": 180
    },
    "ledger": {
     "turn": 3,
     "year": 1203,
-    "population": 14230,
-    "popGrowth": 142,
+    "population": 146000,
+    "popGrowth": 1457,
     "popPct": 1.0,
     "estates": [
      {
       "name": "Крестьяне",
-      "count": 10200,
+      "count": 104652,
       "loyalty": 48
      },
      {
       "name": "Ремесленники",
-      "count": 1800,
+      "count": 18468,
       "loyalty": 57
      },
      {
       "name": "Торговцы",
-      "count": 500,
+      "count": 5130,
       "loyalty": 51
      },
      {
       "name": "Священники",
-      "count": 1630,
+      "count": 16724,
       "loyalty": 92
      },
      {
       "name": "Феодалы",
-      "count": 100,
+      "count": 1026,
       "loyalty": 60
      }
     ],
@@ -295,26 +297,29 @@
      {
       "name": "Вельмар",
       "type": "Столица",
-      "population": 9100,
+      "population": 120000,
       "loyalty": 72,
-      "food": 13000,
-      "craft": 120,
-      "trade": 330,
+      "food": 171429,
+      "craft": 1582,
+      "trade": 4352,
       "buildings": [
        "Собор",
        "Монастырь",
-       "Скрипторий магии"
+       "Скрипторий магии",
+       "Порт"
       ]
      },
      {
       "name": "Сизые топи",
       "type": "Город",
-      "population": 5130,
+      "population": 26000,
       "loyalty": 52,
-      "food": 7400,
-      "craft": 60,
-      "trade": 170,
-      "buildings": []
+      "food": 37505,
+      "craft": 304,
+      "trade": 862,
+      "buildings": [
+       "Ферма"
+      ]
      }
     ],
     "modifiers": [
@@ -334,40 +339,40 @@
    "capital": "Сарра",
    "pantheon": "Огни Пустыни",
    "public": {
-    "population": 21400,
+    "population": 262000,
     "regions": 4,
     "army": 420
    },
    "ledger": {
     "turn": 3,
     "year": 1203,
-    "population": 21400,
-    "popGrowth": 214,
+    "population": 262000,
+    "popGrowth": 2620,
     "popPct": 1.0,
     "estates": [
      {
       "name": "Крестьяне",
-      "count": 16300,
+      "count": 199561,
       "loyalty": 55
      },
      {
       "name": "Ремесленники",
-      "count": 2600,
+      "count": 31832,
       "loyalty": 61
      },
      {
       "name": "Торговцы",
-      "count": 1400,
+      "count": 17140,
       "loyalty": 88
      },
      {
       "name": "Священники",
-      "count": 860,
+      "count": 10529,
       "loyalty": 63
      },
      {
       "name": "Феодалы",
-      "count": 240,
+      "count": 2938,
       "loyalty": 69
      }
     ],
@@ -447,49 +452,51 @@
      {
       "name": "Сарра",
       "type": "Столица",
-      "population": 8800,
+      "population": 210000,
       "loyalty": 78,
-      "food": 13100,
-      "craft": 110,
-      "trade": 700,
+      "food": 312614,
+      "craft": 2625,
+      "trade": 16705,
       "buildings": [
        "Дворец",
        "Большой базар",
-       "Караван-сарай"
+       "Караван-сарай",
+       "Стены"
       ]
      },
      {
       "name": "Оазис Нуур",
       "type": "Город",
-      "population": 5200,
+      "population": 30000,
       "loyalty": 64,
-      "food": 8200,
-      "craft": 70,
-      "trade": 380,
+      "food": 47308,
+      "craft": 404,
+      "trade": 2192,
       "buildings": [
-       "Сады"
+       "Сады x2"
       ]
      },
      {
       "name": "Барханный край",
       "type": "Деревня",
-      "population": 4100,
+      "population": 8000,
       "loyalty": 54,
-      "food": 6300,
-      "craft": 40,
-      "trade": 190,
+      "food": 12293,
+      "craft": 78,
+      "trade": 371,
       "buildings": []
      },
      {
       "name": "Медный берег",
       "type": "Порт",
-      "population": 3300,
+      "population": 14000,
       "loyalty": 59,
-      "food": 5000,
-      "craft": 40,
-      "trade": 340,
+      "food": 21212,
+      "craft": 170,
+      "trade": 1442,
       "buildings": [
-       "Порт"
+       "Порт",
+       "Рыбный промысел"
       ]
      }
     ],
