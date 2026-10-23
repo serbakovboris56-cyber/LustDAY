@@ -269,7 +269,7 @@
 
     return {
       layer,
-      // features: GeoJSON Feature[] с properties.id; info(id) -> {color, selected, regions}.
+      // features: GeoJSON Feature[] с properties.id; info(id) -> {color, selected, regions, style}.
       // regions — публичные цифры провинций [{name, type, population, buildings}] для городов и построек.
       // Если границы те же, а сменились только цвет или выбор, перерисовываются лишь плитки этих государств.
       setTerritories(features, info) {
@@ -279,10 +279,10 @@
         const next = features.map((f) => {
           const g = prepareFeature(f);
           const i = info(f.properties.id) || {};
-          const color = i.color || "#FFD700", regKey = JSON.stringify(i.regions || null);
+          const color = i.color || "#FFD700", regKey = JSON.stringify([i.regions || null, i.style || ""]);
           const o = old.get(f), pv = f.properties.provinces;
           const settle = o && o.regKey === regKey && o.color === color ? o.settle
-            : window.VPISettlements && pv && pv.towns ? window.VPISettlements.prepare(pv, i.regions, color) : null;
+            : window.VPISettlements && pv && pv.towns ? window.VPISettlements.prepare(pv, i.regions, color, i.style) : null;
           return { feature: f, id: f.properties.id, color, selected: !!i.selected, regKey, settle, ...g };
         }).filter((t) => t.rings.length);
         if (!sameShapes) { territories = next; repaint(null); return; }
