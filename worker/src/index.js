@@ -1131,6 +1131,7 @@ async function processTurnQueue(env) {
 
 async function runTurnJob(env, job) {
   if (job.kind === "restore") return runRestoreJob(env, job);
+  if (job.kind === "catchup") return runCatchupJob(env, job);
   let status = "done", error = "", backup = "";
   try {
     const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
@@ -1145,6 +1146,21 @@ async function runTurnJob(env, job) {
   // пропуски приказов считаются от значения на момент «Нового хода»: повтор задания не посчитает пропуск дважды
   if (status === "done") stmts.push(missesStmt(env, job.state_id, job.had_order ? 0 : (job.misses_before || 0) + 1, now));
   await env.DB.batch(stmts);
+  if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
+}
+
+// Догон после разморозки: Движок дописывает пустые ходы до expected_turn (engineSkip_ в Движок.gs).
+async function runCatchupJob(env, job) {
+  let status = "done", error = "", backup = "";
+  try {
+    const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
+    if (!r || !r.sheet_id) throw new Error("у государства нет таблицы");
+    const d = await engineCall(env, { action: "skip", sheetId: r.sheet_id, toTurn: job.expected_turn });
+    if (d.ok) backup = d.backupUrl || "";
+    else if (d.code === "already" && Number(d.turn) >= job.expected_turn) error = "ход уже догнан раньше";
+    else { status = "error"; error = /Неизвестная команда/.test(d.error || "") ? "Движок старой версии: обновите его развёртывание (engine/README.md)" : d.error || "ошибка Движка"; }
+  } catch (e) { status = "error"; error = String(e && e.message || e); }
+  await env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, backup=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), backup, new Date().toISOString(), job.id).run();
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
 }
 
@@ -1221,7 +1237,8 @@ async function runRestoreJob(env, job) {
  * Приказы игроки пишут в ВК; админ отмечает на вкладке «Ход» галочку «приказ есть» (или записывает приказ
  * через «Превью»). Каждый применённый ход без приказа — пропуск, приказ обнуляет счёт. Если и FREEZE_AFTER-й
  * ход подряд без приказа, «Новый ход» вместо хода замораживает государство: оно стоит на своём ходу,
- * «Новый ход» его пропускает, на карте оно отмечено. Разморозить (и заморозить вручную) может админ.
+ * «Новый ход» его пропускает, на карте оно отмечено. Разморозить (и заморозить вручную) может админ;
+ * после разморозки государство догоняет остальных по номеру хода пустыми ходами, без прироста (runCatchupJob).
  * Кризисы и счёт пропусков видят только правитель государства и администраторы (action private);
  * в публичные данные попадает лишь сам факт заморозки.
  * ============================================================ */
@@ -1263,10 +1280,23 @@ async function adminFreeze(env, ctx, stateId, frozen) {
   if (!r) return { ok: false, error: "Государство не найдено или скрыто." };
   if (busy) return { ok: false, error: "Сейчас идёт ход или откат, дождитесь конца." };
   if (r.frozen === frozen) return { ok: true };
+  const now = new Date().toISOString();
   // галочки, поставленные до заморозки, к ходу после разморозки не относятся
-  await env.DB.batch([freezeStmt(env, stateId, frozen, r.turn, frozen ? r.misses : 0, new Date().toISOString()),
-    env.DB.prepare("UPDATE turn_marks SET ready=0, orders=0 WHERE state_id=?").bind(stateId)]);
-  return { ok: true };
+  const stmts = [freezeStmt(env, stateId, frozen, r.turn, frozen ? r.misses : 0, now),
+    env.DB.prepare("UPDATE turn_marks SET ready=0, orders=0 WHERE state_id=?").bind(stateId)];
+  // Размороженное государство догоняет остальных по номеру хода, но без прироста за пропущенные ходы:
+  // Движок добавит ему пустые ходы (задание catchup в той же очереди, что и «Новый ход»).
+  const target = Math.max(0, ...rows.filter((x) => !x.frozen && x.turn !== null).map((x) => x.turn));
+  let catchup = null;
+  if (!frozen && r.turn !== null && r.turn < target) {
+    const cfg = await engineConfig(env);
+    if (cfg.url && cfg.secret) {
+      stmts.push(env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created, kind) VALUES (?1, ?2, ?3, 'pending', ?1, 'catchup')").bind(now, stateId, target));
+      catchup = { from: r.turn, to: target };
+    } else catchup = { from: r.turn, to: target, noEngine: true };
+  }
+  await env.DB.batch(stmts);
+  return { ok: true, catchup };
 }
 
 // Публичный ответ + отметка заморозки (номер хода, на котором государство остановилось).

@@ -304,7 +304,7 @@
         <dt>Войско в строю</dt><dd>${p.army != null ? fmt(p.army) : "—"}</dd>
         ${s.pantheon ? `<dt>Пантеон</dt><dd>${esc(s.pantheon)}</dd>` : ""}
       </dl>
-      ${s.frozen != null ? `<div class="frozen">Государство заморожено с хода ${esc(s.frozen)}: несколько ходов подряд без приказов. Ходы для него не идут, пока администрация не разморозит.</div>` : ""}
+      ${s.frozen != null ? `<div class="frozen">Государство заморожено с хода ${esc(s.frozen)}: несколько ходов подряд без приказов. Ходы для него не идут, пока администрация не разморозит; после разморозки номер хода догонит остальных, но без прироста за пропущенное.</div>` : ""}
       ${pv && !pv.frozen && pv.misses > 0 ? `<div class="crisis">Ходов без приказа подряд: ${pv.misses} из ${pv.freezeAfter}. ${pv.misses + 1 >= pv.freezeAfter ? "Если и к следующему ходу не будет приказа, государство заморозят." : "После " + pv.freezeAfter + "-го государство заморозят."}<div class="crisis__note">Это видят только правитель и администрация.</div></div>` : ""}
       <div id="ledgerSlot"></div>`;
 
@@ -851,6 +851,7 @@
   const JOB_TEXT = { pending: "в очереди", running: "применяется…", done: "применён", error: "ошибка", undone: "откачен" };
   const FREEZE_AFTER = 3;   // ходов подряд без приказа до заморозки; то же число на сервере
   const UNDO_TEXT = { pending: "откат в очереди", running: "откатывается…", done: "ход откачен", error: "ошибка отката" };
+  const CATCHUP_TEXT = { pending: "догон хода в очереди", running: "догоняет ход…", done: "ход догнан без прироста", error: "ошибка догона" };
   function turnMsg(text, isError) {
     const m = $("#turnMsg");
     m.textContent = text || "";
@@ -899,6 +900,7 @@
           // итог последнего «Нового хода» (или отката) показываем, пока он идёт, при ошибке и сразу после
           const undo = r.job && r.job.kind === "restore";
           const job = r.job && r.job.kind !== "freeze" && (b.busy || r.job.status === "error" || r.job.turn === (undo ? r.turn + 1 : r.turn)) ? r.job : null;
+          const backupLabel = r.job && r.job.kind === "catchup" ? "копия до догона" : "копия до хода";
           const links = `<div class="admin__links">${r.sheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}
                 <button type="button" class="linklike" data-tstats="${esc(r.id)}">Цифры</button>
                 ${r.frozen ? "" : `<button type="button" class="linklike" data-tpreview="${esc(r.id)}">Превью</button>`}</div>`;
@@ -914,8 +916,8 @@
           <tr>
             <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}${links}</td>
             <td>${r.turn === null ? "—" : `${r.turn} → ${r.nextTurn}`}
-              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc((undo ? UNDO_TEXT : JOB_TEXT)[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
-                ${job.backup && !undo ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}
+              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc((undo ? UNDO_TEXT : job.kind === "catchup" ? CATCHUP_TEXT : JOB_TEXT)[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
+                ${job.backup && !undo ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">${backupLabel}</a>` : ""}
                 ${job.safety ? ` <a href="${esc(job.safety)}" target="_blank" rel="noopener">копия до отката</a>` : ""}
                 ${job.status === "error" ? ` <button type="button" class="linklike" data-tretry="${job.id}">Повторить</button>` : ""}</div>` : ""}</td>
             <td class="${r.problems.length ? "balance--deficit" : "balance--surplus"}">${r.problems.length ? r.problems.map(esc).join("<br>") : "в порядке"}
@@ -989,8 +991,12 @@
       z.disabled = true;
       try {
         if (DEMO) throw new Error("В демо-режиме заморозка не сохраняется.");
-        await api.admin("adminFreeze", { stateId: r.id, frozen });
-        turnMsg(frozen ? `«${r.name}» заморожено: «Новый ход» его пропускает.` : `«${r.name}» разморожено, счёт пропусков обнулён. Ходы пойдут с его хода ${r.turn ?? ""}.`);
+        const d = await api.admin("adminFreeze", { stateId: r.id, frozen });
+        const c = d.catchup;
+        turnMsg(frozen ? `«${r.name}» заморожено: «Новый ход» его пропускает.`
+          : `«${r.name}» разморожено, счёт пропусков обнулён.` + (!c ? ""
+            : c.noEngine ? ` Движок не подключён, поэтому ход ${c.from} не догнан до ${c.to}.`
+            : ` Ход догонит остальных (${c.from} → ${c.to}) без прироста за пропущенные ходы: задание в очереди, сервер берёт его в течение минуты.`), !!(c && c.noEngine));
         await reloadPublic();
       } catch (err) { turnMsg(err.message, true); }
       loadTurnBoard();
