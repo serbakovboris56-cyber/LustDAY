@@ -147,7 +147,7 @@
     function tileView(coords, size) {
       const k = Math.pow(2, coords.z - nativeZ);                 // экранных пикселей на пиксель карты
       const ox = (coords.x * size.x) / k, oy = (coords.y * size.y) / k;
-      const pad = 180 / k;   // с запасом под значки городов, выступающие за край плитки
+      const pad = 260 / k;   // с запасом под значки городов, выступающие за край плитки
       return { k, ox, oy, view: [ox - pad, oy - pad, ox + size.x / k + pad, oy + size.y / k + pad] };
     }
     function paintTile(tile, coords) {

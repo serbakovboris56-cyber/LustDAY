@@ -233,7 +233,7 @@
         for (let t = 0; t < 30; t++) {
           const c = flat[Math.floor(rand() * flat.length)];
           let d = Infinity;
-          for (const q of pts) d = Math.min(d, dist2(c, q) * (q === p.city ? 0.55 : 1));
+          for (const q of pts) d = Math.min(d, dist2(c, q) * (q === p.city ? 0.3 : 1));
           if (d > bd) { bd = d; best = c; }
         }
         if (bd < 144) break;           // ближе ~12 клеток к соседям — провинция уже заполнена
@@ -254,19 +254,19 @@
       const spots = [], cx = p.city % W, cy = Math.floor(p.city / W);
       const used = new Set([p.city]);
       for (let s = 0; s < SPOT_SLOTS * 3 && spots.length < SPOT_SLOTS; s++) {
-        const ang = s * 2.39996 + rand() * 0.4, r = 15 + s * 0.8;
+        const ang = s * 2.39996 + rand() * 0.4, r = 21 + s * 0.9;
         const sx = Math.round(cx + Math.cos(ang) * r), sy = Math.round(cy + Math.sin(ang) * r * 0.8);
         if (sx < 1 || sy < 1 || sx >= W - 1 || sy >= H - 1) continue;
         const i = sy * W + sx;
         if (keyGrid[i] !== p.key || !cost[i] || cost[i] > 2.5 || road[i] && rand() < 0.7) continue;
-        if ([...used].some((u) => dist2(u, i) < 49)) continue;
+        if ([...used].some((u) => dist2(u, i) < 64)) continue;
         used.add(i); spots.push(i);
       }
       // поля у деревень (для ферм и мельниц): по два места рядом с каждой деревней
       const fields = [];
       villages.forEach((v) => {
         for (let t = 0, got = 0; t < 20 && got < 2; t++) {
-          const ang = rand() * Math.PI * 2, r = 6.5 + rand() * 3;
+          const ang = rand() * Math.PI * 2, r = 8 + rand() * 3;
           const i = Math.round(Math.floor(v / W) + Math.sin(ang) * r) * W + Math.round(v % W + Math.cos(ang) * r);
           if (i < 0 || i >= N || keyGrid[i] !== p.key || !cost[i] || cost[i] > 2.5 || used.has(i)) continue;
           if ([...used].some((u) => dist2(u, i) < 36) || villages.some((u) => dist2(u, i) < 30)) continue;
@@ -293,14 +293,14 @@
   /* ---------------- значки (спрайты) ---------------- */
 
   const C = {
-    line: "#1A120A", plaster: "#DCC9A0", plasterD: "#A48F66", timber: "#B08A5C", timberD: "#7A5C3C",
-    stone: "#ABA392", stoneD: "#746C5E", stoneT: "#C9C2B0",
-    roof: "#A84A2E", roofD: "#6E2C1B", roof2: "#8A5530", roof2D: "#553219", slate: "#5E6A76", slateD: "#38414B",
-    thatch: "#C29E55", thatchD: "#80652F", field1: "#C8AE52", field2: "#8D9A3F", field3: "#6F8A3A",
-    tree: "#3F6B2F", treeD: "#25431C", wood: "#6E4C2C", woodD: "#47301B", water: "#3A6A8C", gold: "#E5C24C", smoke: "rgba(205,200,190,0.55)",
-    magic: "#7B5BC2", magicD: "#4A3480", tent: "#D9CBA6", tentD: "#9E8E66",
+    line: "#2A1D12", plaster: "#C2B08A", plasterD: "#86755A", timber: "#94744F", timberD: "#5C4630",
+    stone: "#958D7D", stoneD: "#5C564C", stoneT: "#ADA694",
+    roof: "#8A3F2A", roofD: "#4E2216", roof2: "#6B4730", roof2D: "#3C2618", slate: "#515A63", slateD: "#2C3238",
+    thatch: "#A3834E", thatchD: "#634F30", field1: "#B9A253", field2: "#857F3E", field3: "#6A7F3A",
+    tree: "#3B6230", treeD: "#223B1B", wood: "#6A4A2E", woodD: "#43301D", water: "#3A6A8C", gold: "#E2BE4C", smoke: "rgba(205,200,190,0.5)",
+    magic: "#7B5BC2", magicD: "#4A3480", tent: "#D4C6A2", tentD: "#978864", ground: "rgba(62, 46, 30, 0.55)", groundD: "rgba(40, 28, 16, 0.5)",
   };
-  const RES = 3;                 // пикселей спрайта на единицу рисунка (с запасом под ретину и зум ×2)
+  const RES = 3.5;               // пикселей спрайта на единицу рисунка (с запасом под ретину и зум ×2)
   const sprites = new Map();
 
   function poly(g, pts, fill) {
@@ -309,23 +309,51 @@
     g.closePath(); g.fillStyle = fill; g.fill(); g.stroke();
   }
   // Дом в изометрии: (x, y) — передний нижний угол, a — длина вправо-вверх, b — вглубь влево, h — стены, rh — конёк.
+  // Свет слева сверху: правая стена светлая, левая в тени, скат крыши темнеет к карнизу, у конька — блик.
   function house(g, x, y, a, b, h, rh, wall, wallD, roof, roofD) {
     const I = 0.5;
     const F = [x, y], R = [x + a, y - a * I], Lp = [x - b, y - b * I], B = [x + a - b, y - (a + b) * I];
     const up = (p) => [p[0], p[1] - h];
     const Ft = up(F), Rt = up(R), Lt = up(Lp), Bt = up(B);
     const rL = [(Ft[0] + Lt[0]) / 2, (Ft[1] + Lt[1]) / 2 - rh], rR = [(Rt[0] + Bt[0]) / 2, (Rt[1] + Bt[1]) / 2 - rh];
+    // тень дома на земле — вправо-вниз
+    g.save(); g.fillStyle = "rgba(20, 12, 4, 0.32)"; g.beginPath();
+    g.moveTo(F[0], F[1]); g.lineTo(R[0], R[1]); g.lineTo(R[0] + h * 0.6, R[1] + h * 0.15); g.lineTo(F[0] + h * 0.6, F[1] + h * 0.15); g.closePath(); g.fill(); g.restore();
     poly(g, [F, Lp, Lt, Ft], wallD);
     poly(g, [F, R, Rt, Ft], wall);
     poly(g, [Lt, Bt, rR, rL], roofD);
     poly(g, [Ft, Lt, rL], wallD);
-    poly(g, [Ft, Rt, rR, rL], roof);
-    // дверь на светлой стене
-    if (a >= 4 && h >= 3.5) {
-      const t0 = 0.4, t1 = 0.62, dh = Math.min(h * 0.6, 3.2), P = (t) => [x + a * t, y - a * I * t];
-      const p0 = P(t0), p1 = P(t1);
-      g.save(); g.lineWidth = 0.3; poly(g, [p0, p1, [p1[0], p1[1] - dh], [p0[0], p0[1] - dh]], C.woodD); g.restore();
+    const gr = g.createLinearGradient(0, rL[1], 0, Ft[1]);
+    gr.addColorStop(0, roof); gr.addColorStop(1, roofD);
+    poly(g, [Ft, Rt, rR, rL], gr);
+    // гравюрная штриховка: черепица/доски на скате и брёвна на стене
+    g.save(); g.strokeStyle = "rgba(25, 12, 4, 0.4)"; g.lineWidth = 0.16; g.beginPath();
+    const nh = Math.max(3, Math.round(a * 1.5));
+    for (let k = 1; k < nh; k++) {
+      const t = k / nh;
+      g.moveTo(rL[0] + (rR[0] - rL[0]) * t, rL[1] + (rR[1] - rL[1]) * t);
+      g.lineTo(Ft[0] + (Rt[0] - Ft[0]) * t, Ft[1] + (Rt[1] - Ft[1]) * t);
     }
+    for (let k = 1; k < 3; k++) {
+      const t = k / 3;
+      g.moveTo(Ft[0] + (rL[0] - Ft[0]) * t, Ft[1] + (rL[1] - Ft[1]) * t); g.lineTo(Rt[0] + (rR[0] - Rt[0]) * t, Rt[1] + (rR[1] - Rt[1]) * t);
+      g.moveTo(F[0] + (Lp[0] - F[0]) * 0, F[1] - h * t); g.lineTo(R[0], R[1] - h * t);
+    }
+    g.stroke(); g.restore();
+    g.save(); g.strokeStyle = "rgba(255, 235, 200, 0.35)"; g.lineWidth = 0.35;
+    g.beginPath(); g.moveTo(rL[0], rL[1] + 0.2); g.lineTo(rR[0], rR[1] + 0.2); g.stroke(); g.restore();
+    // окна и дверь — тёмные пятнышки на стенах
+    g.save(); g.fillStyle = "rgba(30, 20, 10, 0.75)";
+    const P = (t, d) => [x + a * t, y - a * I * t - d];
+    if (a >= 3) {
+      const n = a >= 5 ? 3 : 2;
+      for (let k = 0; k < n; k++) {
+        const t = (k + 0.7) / (n + 0.4), [wx, wy] = P(t, h * 0.62);
+        g.fillRect(wx - 0.25, wy - 0.45, 0.5, 0.75);
+      }
+      if (h >= 2.6) { const [dx, dy] = P(0.5, 0); g.beginPath(); g.moveTo(dx - 0.35, dy + 0.15); g.lineTo(dx + 0.35, dy - 0.2); g.lineTo(dx + 0.35, dy - 1.4); g.lineTo(dx - 0.35, dy - 1.05); g.closePath(); g.fill(); }
+    }
+    g.restore();
   }
   // Каменная башня-коробка с зубцами (донжон, крепостная башня)
   function keep(g, x, y, a, b, h, wall, wallD, top) {
@@ -406,7 +434,7 @@
     const c = document.createElement("canvas");
     c.width = Math.ceil(w * RES); c.height = Math.ceil(h * RES);
     const g = c.getContext("2d");
-    g.scale(RES, RES); g.lineJoin = "round"; g.lineCap = "round"; g.lineWidth = 0.7; g.strokeStyle = C.line;
+    g.scale(RES, RES); g.lineJoin = "round"; g.lineCap = "round"; g.lineWidth = 0.45; g.strokeStyle = C.line;
     paint(g, w / 2, base);
     s = { c, w, h, ax: w / 2, ay: base };
     sprites.set(key, s);
@@ -422,53 +450,83 @@
   const WALLS = [[C.plaster, C.plasterD], [C.timber, C.timberD], [C.plaster, C.plasterD], [C.stone, C.stoneD]];
   const ROOFS = [[C.roof, C.roofD], [C.roof2, C.roof2D], [C.roof, C.roofD], [C.slate, C.slateD]];
 
-  /* Город: дома вокруг центра, у больших — храм, стены с башнями; у столицы — донжон с флагом государства.
+  /* Город — плотная россыпь мелких домов, как в EU4: дома растут от центра рядами вдоль изометрических улиц,
+   * под ними — утоптанная земля, на окраинах — сады и поля. В центре собор, у столицы — донжон с флагом
+   * государства, у города и большого города — стены с башнями.
    * tier 0 посёлок, 1 малый город (~50 тыс.), 2 город, 3 большой город. */
-  const CITY_W = [40, 54, 70, 88];
-  const CITY_MAP = [110, 160, 210, 260];        // ширина значка города в пикселях карты (горы на карте — 30–60)
+  const CITY_W = [38, 50, 64, 80];
+  const CITY_MAP = [140, 210, 280, 360];        // ширина значка города в пикселях карты (горы на карте — 30–60)
   function citySprite(tier, capital, color, variant) {
-    const W = CITY_W[tier], R = [11, 16, 21, 27][tier], n = [6, 12, 19, 28][tier];
-    // точка привязки — передний край города: подпись провинции встаёт сразу под ним
-    const H = W * 0.95 + (capital ? 8 : 0), base = H - W * 0.5 + R * 0.5 + (tier >= 2 ? 6 : 3);
-    return sprite(`city|${tier}|${capital ? color : ""}|${variant}`, W, H, base + R * 0.5 + (tier >= 2 ? 5 : 2), (g, cx, gy) => {
-      gy -= R * 0.5 + (tier >= 2 ? 5 : 2);
+    const W = CITY_W[tier], R = [11, 17, 24, 32][tier], n = [14, 34, 62, 100][tier];
+    const H = W * 0.78 + 14, base = H - 6;          // точка привязки — передний край города
+    return sprite(`city|${tier}|${capital ? color : ""}|${variant}`, W, H, base, (g, cx, gy0) => {
+      const gy = gy0 - R * 0.5 - 2;                   // середина города на земле
       const rand = rng(hashStr("city" + tier + "|" + variant));
-      const parts = [];
-      // дома: точки в изометрическом круге, без наложения друг на друга
-      for (let t = 0; t < n * 6 && parts.length < n; t++) {
-        const ang = rand() * Math.PI * 2, rr = R * Math.sqrt(rand());
-        const x = cx + Math.cos(ang) * rr, y = gy + Math.sin(ang) * rr * 0.5;
-        if (parts.some((p) => Math.abs(p.x - x) < 5.2 && Math.abs(p.y - y) < 2.8)) continue;
-        if (tier >= 1 && Math.abs(x - cx) < 6 && Math.abs(y - gy + 1) < 3) continue;        // место под храм
-        if (capital && Math.abs(x - cx + R * 0.55) < 7 && Math.abs(y - gy + R * 0.25) < 4) continue;
-        const wi = Math.floor(rand() * (tier >= 2 ? 4 : 3)), ri = tier >= 2 ? Math.floor(rand() * 4) : Math.floor(rand() * 3);
-        const big = tier >= 2 && rand() < 0.3;
-        parts.push({ x, y, draw: () => house(g, x - 1.5, y + 1.5, big ? 6.5 : 4.5 + rand() * 1.8, big ? 4.5 : 3 + rand() * 1.4, big ? 6 : 3.6 + rand() * 1.6, 2.6 + rand() * 1.4, ...WALLS[wi], ...(tier === 0 && ri === 1 ? [C.thatch, C.thatchD] : ROOFS[ri])) });
+      const inside = (x, y) => ((x - cx) / R) ** 2 + ((y - gy) / (R * 0.5)) ** 2 <= 1;
+      // дома: «рост» от центра — новый дом рядом с уже стоящим, вдоль одной из двух улиц-диагоналей
+      const homes = [{ x: cx, y: gy + 1 }], step = 3.7;
+      const free = (x, y) => homes.every((p) => Math.abs(p.x - x) > 3.1 || Math.abs(p.y - y) > 1.7);
+      const keepAt = capital ? { x: cx - R * 0.62, y: gy - R * 0.22 } : null;
+      const clear = (x, y) => Math.hypot(x - cx, (y - gy) * 2) > (tier ? 7 : 0) && (!keepAt || Math.hypot(x - keepAt.x, (y - keepAt.y) * 2) > 7.5);
+      for (let t = 0; t < n * 40 && homes.length < n; t++) {
+        const p = homes[Math.floor(rand() * homes.length)];
+        const dir = Math.floor(rand() * 4), dx = [1, -1, 1, -1][dir] * step, dy = [-0.5, 0.5, 0.5, -0.5][dir] * step;
+        const x = p.x + dx + (rand() - 0.5) * 0.8, y = p.y + dy + (rand() - 0.5) * 0.4;
+        if (!inside(x, y) || !free(x, y) || !clear(x, y)) continue;
+        // к краю дома реже: город редеет к окраинам
+        if (rand() < (((x - cx) / R) ** 2 + ((y - gy) / (R * 0.5)) ** 2) * 0.55) continue;
+        homes.push({ x, y });
       }
-      if (tier >= 1) parts.push({ x: cx, y: gy - 1, draw: () => {
-        // храм: неф + колокольня со шпилем (у больших городов — две)
-        house(g, cx - 2, gy + 1.5, 8 + tier, 4.5, 6 + tier, 3.5, C.stone, C.stoneD, C.slate, C.slateD);
-        tower(g, cx - 3.4, gy + 0.2, 2.1, 9 + tier * 2.5, C.stone, C.stoneD, C.slate, C.slateD, 7 + tier);
-        if (tier >= 3) tower(g, cx + 5.4, gy - 4.4, 2, 10 + tier * 2, C.stone, C.stoneD, C.slate, C.slateD, 7 + tier);
+      if (tier) homes.shift();                         // центр занимает собор
+      // утоптанная земля под городом: пятна вокруг каждого дома
+      g.save();
+      for (const [col, pad] of [[C.groundD, 3.6], [C.ground, 2.8]]) {
+        g.fillStyle = col; g.beginPath();
+        for (const p of homes) { g.moveTo(p.x + pad * 1.4, p.y); g.ellipse(p.x, p.y, pad * 1.4, pad * 0.75, 0, 0, Math.PI * 2); }
+        if (tier) { g.moveTo(cx + 9, gy); g.ellipse(cx, gy, 9, 4.5, 0, 0, Math.PI * 2); }
+        g.fill();
+      }
+      g.restore();
+      // окраины: поля и рощи
+      if (tier) for (let k = 0; k < tier + 2; k++) {
+        const a = rand() * Math.PI * 2, rr = R + 4 + rand() * 4;
+        const fx = cx + Math.cos(a) * rr, fy = gy + Math.sin(a) * rr * 0.5;
+        if (fy > gy + R * 0.3) continue;            // впереди — не загораживаем город
+        if (rand() < 0.5) field(g, fx, fy, 4 + rand() * 2, rand() < 0.5 ? C.field1 : C.field3, C.field2);
+        else { tree(g, fx, fy, 2.6); tree(g, fx + 2.4, fy + 0.8, 2.2); }
+      }
+      const parts = homes.map((p) => {
+        const big = rand() < (tier >= 2 ? 0.18 : 0.08);
+        const wi = Math.floor(rand() * WALLS.length), ri = Math.floor(rand() * ROOFS.length);
+        const roofC = tier === 0 && rand() < 0.5 ? [C.thatch, C.thatchD] : ROOFS[ri];
+        const a = big ? 4.6 : 2.6 + rand() * 1.4, b = big ? 3 : 1.9 + rand() * 0.9, h = big ? 3.8 : 2 + rand() * 1.2;
+        return { x: p.x, y: p.y, draw: () => house(g, p.x - a * 0.45, p.y + b * 0.25, a, b, h, 1.5 + rand() * 1.1, ...WALLS[wi], ...roofC) };
+      });
+      if (tier) parts.push({ x: cx, y: gy, draw: () => {
+        // собор: неф и колокольня со шпилем (у больших городов — две)
+        house(g, cx - 2.5, gy + 2, 8 + tier * 1.5, 4.2, 5 + tier, 3.6, C.stone, C.stoneD, C.slate, C.slateD);
+        tower(g, cx - 3.6, gy + 0.6, 1.9, 9 + tier * 2.5, C.stone, C.stoneD, C.slate, C.slateD, 7 + tier);
+        if (tier >= 3) tower(g, cx + 6, gy - 4.6, 1.8, 10 + tier * 2, C.stone, C.stoneD, C.slate, C.slateD, 7 + tier);
       } });
-      if (capital) parts.push({ x: cx - R * 0.55, y: gy - R * 0.25, draw: () => {
-        const kx = cx - R * 0.55, ky = gy - R * 0.25 + 3;
-        keep(g, kx, ky, 6, 5, 12 + tier * 2, C.stone, C.stoneD, C.stoneT);
-        flag(g, kx + 0.5, ky - 12 - tier * 2 - 1.5, 7, color);
+      if (keepAt) parts.push({ x: keepAt.x, y: keepAt.y, draw: () => {
+        const kx = keepAt.x, ky = keepAt.y + 3;
+        keep(g, kx, ky, 5.5, 4.5, 11 + tier * 2, C.stone, C.stoneD, C.stoneT);
+        flag(g, kx + 0.5, ky - 11 - tier * 2 - 1.5, 7, color);
+        if (tier >= 1) tower(g, kx + 6, ky - 2.6, 1.7, 8 + tier * 1.5, C.stone, C.stoneD, C.roof, C.roofD, 4.5);
       } });
       parts.sort((a, b) => a.y - b.y);
-      shadow(g, cx, gy + 1, R + (tier >= 2 ? 7 : 4));
       // стены: задняя половина — до домов, передняя — после
       const wall = (from, to) => {
-        const rx = R + 5, ry = (R + 5) * 0.5;
+        const rx = R + 3.5, ry = (R + 3.5) * 0.5;
         g.save();
-        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 3.4; g.strokeStyle = C.line; g.stroke();
-        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 2.4; g.strokeStyle = C.stoneD; g.stroke();
-        g.beginPath(); g.ellipse(cx, gy - 1.6, rx, ry, 0, from, to); g.lineWidth = 2; g.strokeStyle = C.stone; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 2.6; g.strokeStyle = C.line; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 1.8; g.strokeStyle = C.stoneD; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy - 1.3, rx, ry, 0, from, to); g.lineWidth = 1.4; g.strokeStyle = C.stone; g.stroke();
         g.restore();
-        for (let a = from; a <= to + 1e-6; a += Math.PI / 3) {
-          const a2 = Math.abs(a - Math.PI * 1.5) < 0.01 ? a + 0.35 : a;
-          tower(g, cx + Math.cos(a2) * rx, gy + Math.sin(a2) * ry + 1, 2.3, 6.5, C.stone, C.stoneD, C.roof, C.roofD, tier >= 3 ? 4.5 : 0);
+        const nT = tier >= 3 ? 10 : 8;
+        for (let k = 0; k <= nT / 2; k++) {
+          const a = from + ((to - from) * k) / (nT / 2);
+          tower(g, cx + Math.cos(a) * rx, gy + Math.sin(a) * ry + 0.8, 1.6, 5, C.stone, C.stoneD, C.roof, C.roofD, tier >= 3 ? 3.5 : 0);
         }
       };
       if (tier >= 2) wall(Math.PI, Math.PI * 2);
@@ -476,14 +534,19 @@
       if (tier >= 2) wall(0, Math.PI);
     });
   }
+  // Деревня: несколько изб под соломой, поля и деревья вокруг
   function villageSprite(variant) {
-    return sprite("village|" + variant, 26, 22, 16, (g, cx, gy) => {
-      shadow(g, cx - 1, gy + 1.5, 7);
-      field(g, cx + (variant ? -6 : 6), gy + 2, 5.5, C.field1, C.field2);
-      if (variant) tree(g, cx + 7, gy - 2, 4.2); else tree(g, cx - 8, gy - 1, 4);
-      house(g, cx - 3.5, gy - 0.5, 4.2, 3.2, 3.2, 2.8, C.timber, C.timberD, C.thatch, C.thatchD);
-      house(g, cx + (variant ? 1.5 : 0.5), gy + 2.5, 4.6, 3.2, 3.4, 2.8, C.plaster, C.plasterD, C.thatch, C.thatchD);
-      if (variant) tree(g, cx - 9, gy + 3, 3.4);
+    return sprite("village|" + variant, 34, 24, 18, (g, cx, gy) => {
+      const rand = rng(hashStr("village" + variant));
+      g.save(); g.fillStyle = C.ground; g.beginPath(); g.ellipse(cx, gy - 0.5, 8, 3.6, 0, 0, Math.PI * 2); g.fill(); g.restore();
+      field(g, cx + (variant ? -10 : 10), gy - 1, 5, C.field1, C.field2);
+      field(g, cx + (variant ? 9 : -9), gy + 2, 4, C.field3, C.field2);
+      tree(g, cx + (variant ? 7 : -7), gy - 4, 2.8); tree(g, cx + (variant ? 9.5 : -9.5), gy - 3, 2.4);
+      const spots = [[-3.5, -2], [1.5, -3], [3.5, 0.5], [-1, 1.5], [-5, 1.5], [5.5, -2.5]].slice(0, 4 + variant);
+      spots.sort((a, b) => a[1] - b[1]).forEach(([dx, dy]) => {
+        const a = 2.6 + rand() * 1, b = 2 + rand() * 0.6;
+        house(g, cx + dx - a * 0.45, gy + dy + b * 0.25, a, b, 1.9 + rand() * 0.6, 1.6 + rand() * 0.6, ...(rand() < 0.5 ? [C.timber, C.timberD] : [C.plaster, C.plasterD]), C.thatch, C.thatchD);
+      });
     });
   }
 
@@ -519,7 +582,7 @@
     return { name: s, n: 1 };
   }
   const BW = { castle: 34, walls: 30, temple: 26, magic: 24, port: 26, farm: 24, mill: 22 };
-  const B_MAP = 2.2, VILLAGE_MAP = 52;        // постройки и деревни в пикселях карты
+  const B_MAP = 2.6, VILLAGE_MAP = 80;        // постройки и деревни в пикселях карты
   function buildingSprite(kind, color) {
     const w = BW[kind] || 22;
     return sprite(`b|${kind}|${kind === "castle" || kind === "barracks" ? color : ""}`, w, w * 1.15, w * 0.85, (g, cx, gy) => {
@@ -661,7 +724,7 @@
       const pop = reg ? Number(reg.population) || 0 : 0;
       const tier = tierOf(pop), capital = reg ? /столиц/i.test(reg.type || "") : t.i === 0 && data.towns.length > 1;
       const variant = hashStr(t.name) % 3;
-      items.push({ spr: citySprite(tier, capital, color, variant), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 14 + tier * 4,
+      items.push({ spr: citySprite(tier, capital, color, variant), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 20 + tier * 6,
         tip: { name: t.name, tier: TIER_NAMES[tier], capital, pop, buildings: reg ? reg.buildings || [] : [] } });
       grow(t.x, t.y);
       const nv = reg ? Math.min(t.villages.length, villagesFor(pop)) : Math.min(t.villages.length, 2);
