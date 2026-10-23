@@ -78,7 +78,8 @@
 
   /* A* по клеткам в рамке box: cost[i] — цена клетки (0 — не пройти), allow(i) — можно ли туда.
    * Дороги, уже проложенные раньше, дешевле: новые дороги к ним примыкают, и получается сеть, а не пучок. */
-  function findPath(W, cost, road, from, to, box, allow) {
+  // goal(i) — дополнительная цель: путь кончается на первой такой клетке (деревня примыкает к уже готовой дороге).
+  function findPath(W, cost, road, from, to, box, allow, goal) {
     const [x0, y0, x1, y1] = box, bw = x1 - x0 + 1, bh = y1 - y0 + 1, n = bw * bh;
     const g = new Float32Array(n).fill(Infinity), came = new Int32Array(n).fill(-1), closed = new Uint8Array(n);
     const local = (i) => { const x = i % W - x0, y = Math.floor(i / W) - y0; return x >= 0 && y >= 0 && x < bw && y < bh ? y * bw + x : -1; };
@@ -89,38 +90,55 @@
     if (s < 0 || local(to) < 0) return null;
     g[s] = 0; heap.push(s, 0);
     const step = (c) => (road[c] ? cost[c] * 0.35 : cost[c]);
-    let found = false, guard = 0;
+    let found = -1, guard = 0;
     while (heap.size && guard++ < n * 3) {
       const cur = heap.pop();
       if (closed[cur]) continue;
       closed[cur] = 1;
       const cx = cur % bw, cy = (cur - cx) / bw, gi = (cy + y0) * W + cx + x0;
-      if (gi === to) { found = true; break; }
+      if (gi === to || (goal && gi !== from && goal(gi))) { found = cur; break; }
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue;
         const nx = cx + dx, ny = cy + dy;
         if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
         const nl = ny * bw + nx, ng = (ny + y0) * W + nx + x0;
-        if (closed[nl] || !cost[ng] || (ng !== to && !allow(ng))) continue;
+        if (closed[nl] || !cost[ng] || (ng !== to && !allow(ng) && !(goal && goal(ng)))) continue;
         // по диагонали — только если обе соседние клетки проходимы (не срезаем угол через воду)
         if (dx && dy && (!cost[gi + dx] || !cost[gi + dy * W])) continue;
         const d = g[cur] + ((step(gi) + step(ng)) / 2) * (dx && dy ? 1.414 : 1);
         if (d < g[nl]) { g[nl] = d; came[nl] = cur; heap.push(nl, d + h(nx + x0, ny + y0)); }
       }
     }
-    if (!found) return null;
+    if (found < 0) return null;
     const out = [];
-    for (let c = local(to); c >= 0; c = came[c]) out.push((Math.floor(c / bw) + y0) * W + (c % bw) + x0);
+    for (let c = found; c >= 0; c = came[c]) out.push((Math.floor(c / bw) + y0) * W + (c % bw) + x0);
     return out.reverse();
   }
 
   // Цена клеток, провинции и места городов — общее для расчёта и для режима «Города» в кисти.
   function layout(opts) {
-    const { owner, prov, land, W, H, owners, names, cities = {}, mountains = [] } = opts;
+    const { owner, prov, land, W, H, owners, names, cities = {}, mountains = [], lakes = [] } = opts;
     const N = W * H;
-    // цена клеток: вода не проходима, берег и холмы дороже, горы — намного дороже
+    // цена клеток: вода не проходима, берег (клетка наполовину в воде) и холмы дороже, горы — намного дороже
     const cost = new Float32Array(N);
-    for (let i = 0; i < N; i++) cost[i] = land[i] === 1 ? 1 : land[i] === 2 ? 2.5 : 0;
+    for (let i = 0; i < N; i++) cost[i] = land[i] === 1 ? 1 : land[i] === 2 ? 6 : 0;
+    // озёра: в сетке суши их нет (она строится только по морскому берегу), вырезаем их здесь
+    for (const ring of lakes) {
+      if (!ring || ring.length < 3) continue;
+      let y0 = Infinity, y1 = -Infinity;
+      for (const [, y] of ring) { if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      for (let cy = Math.max(0, Math.floor(y0 / CELL - 1)); cy <= Math.min(H - 1, Math.ceil(y1 / CELL)); cy++) {
+        const yc = (cy + 0.5) * CELL, xs = [];
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [ax, ay] = ring[j], [bx, by] = ring[i];
+          if ((ay > yc) !== (by > yc)) xs.push(ax + ((yc - ay) / (by - ay)) * (bx - ax));
+        }
+        xs.sort((a, b) => a - b);
+        for (let k = 0; k + 1 < xs.length; k += 2) {
+          for (let cx = Math.max(0, Math.ceil(xs[k] / CELL - 0.5)); cx <= Math.min(W - 1, Math.floor(xs[k + 1] / CELL - 0.5)); cx++) cost[cy * W + cx] = 0;
+        }
+      }
+    }
     for (const [mx, my, ms, mk] of mountains) {
       const cx = mx / CELL, cy = (my - ms * 0.35) / CELL, r = Math.max(0.7, (ms * (mk ? 0.42 : 0.3)) / CELL);
       const v = mk === 2 ? 9 : mk === 1 ? 6 : 1.8;
@@ -182,7 +200,7 @@
    * Расчёт поселений для всех государств сразу (дороги между городами идут и через границы государств).
    * opts: { owner, prov (Uint8Array клеток), land (0 вода, 1 суша, 2 берег), W, H,
    *         owners: [stateId], names(stateId) -> [названия провинций], cities: {stateId: {провинция: [x, y]}},
-   *         mountains: [[x, y, size, kind]] из map.json }
+   *         mountains: [[x, y, size, kind]] из map.json, lakes: [кольца озёр] из map.json }
    * Возвращает { [stateId]: { towns: [...], links: [[[x, y], …]] } } в пикселях исходной карты.
    */
   function compute(opts) {
@@ -192,6 +210,17 @@
 
     const road = new Uint8Array(N);
     const mark = (path) => { for (const c of path) road[c] = 1; };
+    // Дорога не дублирует готовую: от пути остаются только новые куски (плюс клетка стыка с сетью).
+    const fresh = (path) => {
+      const segs = [];
+      let cur = null;
+      path.forEach((c, i) => {
+        if (!road[c]) { if (!cur) cur = i > 0 ? [path[i - 1]] : []; cur.push(c); }
+        else if (cur) { cur.push(c); segs.push(cur); cur = null; }
+      });
+      if (cur) segs.push(cur);
+      return segs.filter((g) => g.length >= 2);
+    };
     const toLine = (path) => simplify(path.map((c) => [c % W + 0.5, Math.floor(c / W) + 0.5]), 0.6).map(([x, y]) => [Math.round(x * CELL), Math.round(y * CELL)]);
     const unionBox = (a, b, m) => [Math.max(0, Math.min(a[0], b[0]) - m), Math.max(0, Math.min(a[1], b[1]) - m), Math.min(W - 1, Math.max(a[2], b[2]) + m), Math.min(H - 1, Math.max(a[3], b[3]) + m)];
 
@@ -218,8 +247,9 @@
       let path = findPath(W, cost, road, a.city, b.city, unionBox(a.box, b.box, 2), (i) => keyGrid[i] === ka || keyGrid[i] === kb);
       if (!path) path = findPath(W, cost, road, a.city, b.city, unionBox(a.box, b.box, 12), () => true);
       if (!path) continue;
+      const segs = fresh(path);
       mark(path);
-      out[a.id].links.push(toLine(path));
+      for (const g of segs) out[a.id].links.push(toLine(g));
     }
 
     // деревни, места построек и дороги к деревням — внутри каждой провинции
@@ -246,9 +276,13 @@
         for (let q = 0; q < j; q++) { const d = dist2(v, villages[q]); if (d < bd) { bd = d; to = villages[q]; } }
         const pad = 3, vx = v % W, vy = Math.floor(v / W), tx = to % W, ty = Math.floor(to / W);
         const box = [Math.max(0, Math.min(vx, tx) - pad - 6), Math.max(0, Math.min(vy, ty) - pad - 6), Math.min(W - 1, Math.max(vx, tx) + pad + 6), Math.min(H - 1, Math.max(vy, ty) + pad + 6)];
-        const path = findPath(W, cost, road, v, to, box, (i) => keyGrid[i] === p.key) || findPath(W, cost, road, v, to, unionBox(p.box, p.box, 1), (i) => keyGrid[i] === p.key);
+        // путь кончается на первой клетке уже проложенной дороги своей провинции — без двойных линий
+        const net = (i) => road[i] === 1 && keyGrid[i] === p.key;
+        const inProv = (i) => keyGrid[i] === p.key;
+        const path = findPath(W, cost, road, v, to, box, inProv, net) || findPath(W, cost, road, v, to, unionBox(p.box, p.box, 1), inProv, net);
+        const seg = path ? fresh(path)[0] || null : null;
         if (path) mark(path);
-        vroads.push(path ? toLine(path) : []);
+        vroads.push(seg ? toLine(seg) : []);
       });
       // места построек: по спирали вокруг города, на ровной суше своей провинции
       const spots = [], cx = p.city % W, cy = Math.floor(p.city / W);
@@ -397,15 +431,22 @@
 
   function drawRoads(ctx, k, view, list) {
     if (k < SHOW.links) return;
-    const pass = (roads, w) => {
-      ctx.strokeStyle = "rgba(24, 16, 8, 0.75)"; ctx.lineWidth = (w + 1.6) / k;
-      for (const r of roads) if (hit(r.b, view)) ctx.stroke(r.p);
-      ctx.strokeStyle = "#C2A262"; ctx.lineWidth = w / k;
-      for (const r of roads) if (hit(r.b, view)) ctx.stroke(r.p);
-    };
+    // сначала тёмная кайма всех дорог, потом светлая середина: на стыках нет тёмных зарубок
+    const wl = k >= 1 ? 2.6 : k >= 0.5 ? 2 : 1.5, wv = k >= 1 ? 1.6 : 1.1;
+    const sets = [];
+    for (const s of list) {
+      if (!hit(s.box, view)) continue;
+      sets.push([s.links, wl]);
+      if (k >= SHOW.villages) sets.push([s.vroads, wv]);
+    }
     ctx.lineCap = "round"; ctx.lineJoin = "round";
-    for (const s of list) if (hit(s.box, view)) pass(s.links, k >= 1 ? 2.6 : k >= 0.5 ? 2 : 1.5);
-    if (k >= SHOW.villages) for (const s of list) if (hit(s.box, view)) pass(s.vroads, k >= 1 ? 1.6 : 1.1);
+    for (const [color, extra] of [["rgba(24, 16, 8, 0.75)", 1.6], ["#C2A262", 0]]) {
+      ctx.strokeStyle = color;
+      for (const [roads, w] of sets) {
+        ctx.lineWidth = (w + extra) / k;
+        for (const r of roads) if (hit(r.b, view)) ctx.stroke(r.p);
+      }
+    }
   }
 
   function drawIcons(ctx, k, view, list) {
