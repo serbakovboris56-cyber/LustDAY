@@ -597,6 +597,7 @@
     try {
       const res = await api.admin("adminRefresh");
       applyPublic(res);
+      addBorders();            // подписи на карте — с новыми названиями
       state.ledgers.clear();
       adminMsg("Данные обновлены.");
       openAdmin(true);

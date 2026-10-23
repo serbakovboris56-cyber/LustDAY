@@ -19,12 +19,17 @@ export default {
   async fetch(request, env, ctx) {
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    const reply = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json; charset=utf-8" } });
+    const reply = (obj, status = 200, extra = {}) => new Response(obj instanceof RawJSON ? obj.text : JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json; charset=utf-8", ...extra } });
     try {
       if (request.method === "GET") {
         const action = new URL(request.url).searchParams.get("action") || "public";
         if (action === "public") return reply(await publicPayload(env, ctx));
-        if (action === "borders") return reply(await bordersPayload(env));
+        if (action === "borders") {
+          const etag = await bordersETag(env);
+          const cache = { ETag: etag, "Cache-Control": "no-cache" };
+          if ((request.headers.get("If-None-Match") || "") === etag) return new Response(null, { status: 304, headers: { ...cors, ...cache } });
+          return reply(await bordersPayload(env), 200, cache);
+        }
         if (action === "ping") return reply({ ok: true, time: new Date().toISOString(), google: !!env.GOOGLE_SA_KEY, admin: !!adminSecret(env) });
         return reply({ ok: false, error: "Неизвестное действие" }, 404);
       }
@@ -44,7 +49,7 @@ export default {
   async scheduled(event, env, ctx) {
     // ежеминутный cron разбирает очередь «Нового хода», раз в 10 минут — сбор цифр
     if (event.cron === "* * * * *") ctx.waitUntil(processTurnQueue(env));
-    else ctx.waitUntil(refreshSnapshot(env));
+    else ctx.waitUntil(refreshSnapshot(env).catch((e) => console.error(e)));
   },
 };
 
@@ -56,6 +61,7 @@ function corsHeaders(request, env) {
     "Access-Control-Allow-Origin": ok ? origin : allowed[0] || "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Expose-Headers": "ETag",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
@@ -66,7 +72,7 @@ async function handlePost(body, env, ctx, request) {
     case "login": return login(env, body.login, body.password, request);
     case "ledger": return ledger(env, ctx, body.token, body.stateId);
     case "session": return renewSession(env, body.token);
-    case "adminRefresh": await requireAdmin(env, body.token); await refreshSnapshot(env); return { ok: true, ...(await publicPayload(env, ctx)) };
+    case "adminRefresh": await requireAdmin(env, body.token); await refreshSnapshot(env, { force: true }); return { ok: true, ...(await publicPayload(env, ctx)) };
     case "adminStates": await requireAdmin(env, body.token); return { ok: true, states: await adminStates(env, ctx) };
     case "adminSaveState": await requireAdmin(env, body.token); return adminSaveState(env, body.state);
     case "adminDeleteState": await requireAdmin(env, body.token); return adminDeleteState(env, body.stateId);
@@ -79,7 +85,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminCreateState": await requireAdmin(env, body.token); return adminCreateState(env, ctx, body.state);
     case "adminFindCopy": await requireAdmin(env, body.token); return adminFindCopy(env, ctx, body.stateId);
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
-    case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
+    case "adminGetGrid": await requireAdmin(env, body.token); return new RawJSON(`{"ok":true,"grid":${(await env.KV.get("territory_grid")) || "null"}}`);
     case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries, body.provinces);
     case "adminTurnBoard": await requireAdmin(env, body.token); return adminTurnBoard(env, ctx);
     case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn);
@@ -235,11 +241,15 @@ async function ledger(env, ctx, token, stateId) {
   const t = await readToken(env, token);
   const id = t.role === "admin" ? String(stateId || "") : t.stateId;
   if (t.role !== "admin" && stateId && stateId !== t.stateId) return { ok: false, error: "Это не ваше государство." };
-  const snap = await getSnapshot(env, ctx);
-  const s = snap.states.find((x) => x.id === id);
+  // одна строка снимка, а не весь снимок: панель открывают часто
+  await ensureSnapshotTable(env);
+  const row = await env.DB.prepare(`SELECT s.data, s.updated ${SNAP_JOIN} AND s.state_id = ?`).bind(id).first();
+  let s = null;
+  try { s = row ? JSON.parse(row.data) : null; } catch { s = null; }
+  if (!s) s = ((await getSnapshot(env, ctx)) || { states: [] }).states.find((x) => x.id === id);
   if (!s) return { ok: false, error: "Государство не найдено." };
   if (s.error) return { ok: false, error: "Таблица государства недоступна: " + s.error };
-  return { ok: true, stateId: id, turn: snap.turn, updated: snap.updated, ledger: s.ledger };
+  return { ok: true, stateId: id, turn: s.ledger ? s.ledger.turn : 0, updated: row ? row.updated : "", ledger: s.ledger };
 }
 
 /* ============================================================
@@ -349,11 +359,14 @@ function parseLedger(vr, startYear) {
 
 /* ============================================================
  * СНИМОК ДАННЫХ
+ * Цифры каждого государства лежат строкой в D1 (snapshot_states): правка одной таблицы или ход одного
+ * государства переписывает только его строку, так что параллельные задания не затирают друг друга.
+ * Публичная страница читает лёгкую колонку public, а не все ledger целиком.
  * ============================================================ */
 async function settings(env) {
   const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
   const o = {}; results.forEach((r) => { o[r.key] = r.value; });
-  return { season: o.season || "Средневековье", startYear: Number(o.start_year) || 1200 };
+  return { season: o.season || "Средневековье", startYear: Number(o.start_year) || 1200, snapUpdated: o._snap_updated || "" };
 }
 
 async function registry(env) {
@@ -361,7 +374,16 @@ async function registry(env) {
   return results.map((r, i) => ({ ...r, color: r.color || COLORS[i % COLORS.length], active: !!r.active }));
 }
 
-async function collectState(env, r, cfg) {
+let snapshotTableReady = false;
+async function ensureSnapshotTable(env) {
+  if (snapshotTableReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS snapshot_states (state_id TEXT PRIMARY KEY, data TEXT NOT NULL, public TEXT NOT NULL, turn INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL)").run();
+  snapshotTableReady = true;
+}
+
+// prev — прежние цифры государства: если таблица сейчас не читается (лимит Google, сбой сети),
+// на сайте остаются они, а причина пишется в readError.
+async function collectState(env, r, cfg, prev) {
   const base = { id: r.id, name: r.name, ruler: r.ruler, color: r.color, capital: r.capital, pantheon: r.pantheon };
   if (!r.sheet_id) return { ...base, public: {}, error: "нет ссылки на таблицу" };
   try {
@@ -369,54 +391,138 @@ async function collectState(env, r, cfg) {
     if (!base.name) base.name = (d.sheetName && !d.sheetName.startsWith("[") ? d.sheetName : "") || r.id;
     return { ...base, public: d.public, ledger: d.ledger };
   } catch (e) {
+    if (prev && prev.ledger && !prev.error) {
+      return { ...base, name: base.name || prev.name, public: prev.public || {}, ledger: prev.ledger, readError: e.message, readErrorAt: new Date().toISOString() };
+    }
     return { ...base, public: {}, error: e.message };
   }
 }
 const snapTurn = (states) => states.reduce((m, s) => Math.max(m, (s.ledger && s.ledger.turn) || 0), 0);
+const publicOf = (s) => ({ id: s.id, name: s.name, ruler: s.ruler, color: s.color, capital: s.capital, pantheon: s.pantheon, public: s.public || {} });
 
-async function refreshSnapshot(env) {
-  const [regs, cfg] = await Promise.all([registry(env), settings(env)]);
-  const states = await Promise.all(regs.filter((r) => r.active).map((r) => collectState(env, r, cfg)));
-  const snap = { turn: snapTurn(states), season: cfg.season, updated: new Date().toISOString(), states };
-  await env.KV.put("snapshot", JSON.stringify(snap));
-  return snap;
+function snapshotUpsert(env, s, now) {
+  return env.DB.prepare(`INSERT INTO snapshot_states (state_id, data, public, turn, updated) VALUES (?1, ?2, ?3, ?4, ?5)
+      ON CONFLICT(state_id) DO UPDATE SET data=?2, public=?3, turn=?4, updated=?5`)
+    .bind(s.id, JSON.stringify(s), JSON.stringify(publicOf(s)), (s.ledger && s.ledger.turn) || 0, now);
 }
 
-// После правки одной таблицы перечитываем только её, остальные берём из снимка.
+async function previousStates(env) {
+  await ensureSnapshotTable(env);
+  const { results } = await env.DB.prepare("SELECT state_id, data FROM snapshot_states").all();
+  const m = new Map();
+  for (const r of results) { try { m.set(r.state_id, JSON.parse(r.data)); } catch { /* битая строка */ } }
+  return m;
+}
+
+// Сбор цифр без давки: пока идёт один сбор (до 2 минут), фоновые запросы второй не запускают —
+// иначе каждый посетитель при устаревшем снимке читал бы все таблицы заново и упирался в лимит Google.
+const SNAP_LOCK_MS = 2 * 60 * 1000;
+async function claimSnapLock(env) {
+  const now = Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('_snap_lock', '0')").run();
+  const r = await env.DB.prepare("UPDATE settings SET value = ?1 WHERE key = '_snap_lock' AND CAST(value AS INTEGER) < ?2").bind(String(now), now - SNAP_LOCK_MS).run();
+  return r.meta.changes > 0;
+}
+
+// force — сбор по кнопке администратора: идёт, даже если фоновый сбор уже начат. Без force при занятом
+// замке возвращает null.
+async function refreshSnapshot(env, { force = false } = {}) {
+  if (!(await claimSnapLock(env)) && !force) return null;
+  try {
+    const [regs, cfg, prev] = await Promise.all([registry(env), settings(env), previousStates(env)]);
+    const active = regs.filter((r) => r.active);
+    const states = await Promise.all(active.map((r) => collectState(env, r, cfg, prev.get(r.id))));
+    const now = new Date().toISOString();
+    const stmts = states.map((s) => snapshotUpsert(env, s, now));
+    const ids = active.map((r) => r.id);
+    stmts.push(ids.length
+      ? env.DB.prepare(`DELETE FROM snapshot_states WHERE state_id NOT IN (${ids.map(() => "?").join(",")})`).bind(...ids)
+      : env.DB.prepare("DELETE FROM snapshot_states"));
+    stmts.push(env.DB.prepare("INSERT INTO settings (key, value) VALUES ('_snap_updated', ?1) ON CONFLICT(key) DO UPDATE SET value=?1").bind(now));
+    await env.DB.batch(stmts);
+    return { turn: snapTurn(states), season: cfg.season, updated: now, states };
+  } finally {
+    await env.DB.prepare("UPDATE settings SET value = '0' WHERE key = '_snap_lock'").run().catch(() => null);
+  }
+}
+
+// После правки одной таблицы или хода одного государства перечитываем только его строку.
 async function refreshOneState(env, stateId) {
-  const text = await env.KV.get("snapshot");
-  if (!text) return refreshSnapshot(env);
-  const [regs, cfg] = await Promise.all([registry(env), settings(env)]);
+  await ensureSnapshotTable(env);
+  const [regs, cfg, prevRow] = await Promise.all([
+    registry(env), settings(env),
+    env.DB.prepare("SELECT data FROM snapshot_states WHERE state_id = ?").bind(String(stateId)).first(),
+  ]);
   const r = regs.find((x) => x.id === stateId);
-  const snap = JSON.parse(text);
-  if (!r || !r.active) return snap;
-  const fresh = await collectState(env, r, cfg);
-  const i = snap.states.findIndex((x) => x.id === stateId);
-  if (i >= 0) snap.states[i] = fresh; else snap.states.push(fresh);
-  snap.turn = snapTurn(snap.states);
-  snap.season = cfg.season;
-  await env.KV.put("snapshot", JSON.stringify(snap));
-  return snap;
+  if (r && r.active) {
+    let prev = null; try { prev = prevRow ? JSON.parse(prevRow.data) : null; } catch { /* нет прежних */ }
+    await snapshotUpsert(env, await collectState(env, r, cfg, prev), new Date().toISOString()).run();
+  }
+  return (await loadSnapshot(env)) || { turn: 0, season: cfg.season, updated: "", states: [] };
 }
+
+// Поля реестра (название, цвет, правитель…) берём из states, а не из снимка: правка в «Управлении» видна сразу.
+const SNAP_JOIN = "FROM snapshot_states s JOIN states r ON r.id = s.state_id WHERE r.active = 1";
+function overlayRegistry(s, r) {
+  s.id = r.id;
+  if (r.name) s.name = r.name;
+  for (const k of ["ruler", "capital", "pantheon"]) s[k] = r[k];
+  if (r.color) s.color = r.color;
+  return s;
+}
+
+async function loadSnapshot(env) {
+  await ensureSnapshotTable(env);
+  const [{ results }, cfg] = await Promise.all([
+    env.DB.prepare(`SELECT s.data, r.id, r.name, r.ruler, r.color, r.capital, r.pantheon ${SNAP_JOIN} ORDER BY r.position, r.rowid`).all(),
+    settings(env),
+  ]);
+  if (!results.length && !cfg.snapUpdated) return null;
+  const states = [];
+  for (const row of results) { try { states.push(overlayRegistry(JSON.parse(row.data), row)); } catch { /* битая строка */ } }
+  return { turn: snapTurn(states), season: cfg.season, updated: cfg.snapUpdated, states };
+}
+
+const snapStale = (updated) => !updated || Date.now() - new Date(updated).getTime() > SNAPSHOT_MAX_AGE;
 
 async function getSnapshot(env, ctx) {
-  const text = await env.KV.get("snapshot");
-  if (text) {
-    const snap = JSON.parse(text);
-    const age = Date.now() - new Date(snap.updated).getTime();
-    if (age < SNAPSHOT_MAX_AGE) return snap;
-    ctx.waitUntil(refreshSnapshot(env));      // отдаём старое, свежее соберётся в фоне
-    return snap;
-  }
-  return refreshSnapshot(env);
+  const snap = await loadSnapshot(env);
+  if (!snap) return (await refreshSnapshot(env, { force: true }));
+  if (snapStale(snap.updated)) ctx.waitUntil(refreshSnapshot(env));      // отдаём старое, свежее соберётся в фоне
+  return snap;
 }
 
 async function publicPayload(env, ctx) {
-  const snap = await getSnapshot(env, ctx);
-  return {
-    turn: snap.turn, season: snap.season, updated: snap.updated, demo: false,
-    states: snap.states.map((s) => ({ id: s.id, name: s.name, ruler: s.ruler, color: s.color, capital: s.capital, pantheon: s.pantheon, public: s.public || {} })),
-  };
+  await ensureSnapshotTable(env);
+  const [{ results }, cfg] = await Promise.all([
+    env.DB.prepare(`SELECT s.public, s.turn, r.id, r.name, r.ruler, r.color, r.capital, r.pantheon ${SNAP_JOIN} ORDER BY r.position, r.rowid`).all(),
+    settings(env),
+  ]);
+  if (!results.length && !cfg.snapUpdated) {
+    const snap = await getSnapshot(env, ctx);
+    return { turn: snap.turn, season: snap.season, updated: snap.updated, demo: false, states: snap.states.map(publicOf) };
+  }
+  if (snapStale(cfg.snapUpdated)) ctx.waitUntil(refreshSnapshot(env));
+  const states = [];
+  let turn = 0;
+  for (const row of results) {
+    try { states.push(overlayRegistry(JSON.parse(row.public), row)); turn = Math.max(turn, row.turn || 0); } catch { /* битая строка */ }
+  }
+  return { turn, season: cfg.season, updated: cfg.snapUpdated, demo: false, states };
+}
+
+// Ответ сервера, уже собранный в JSON-строку (без лишнего JSON.parse + stringify больших контуров).
+class RawJSON { constructor(text) { this.text = text; } }
+
+// Контуры склеиваются из строк D1 как есть. ETag по числу и времени правок: браузер переспрашивает
+// с If-None-Match, и при неизменных границах сервер отвечает 304 без чтения контуров.
+async function bordersETag(env) {
+  await ensureProvinceTable(env);
+  const [b, p] = await Promise.all([
+    env.DB.prepare("SELECT count(*) AS n, max(updated) AS u FROM borders").first(),
+    env.DB.prepare("SELECT count(*) AS n, max(updated) AS u FROM provinces").first(),
+  ]);
+  return `W/"b${b.n}-${b.u || ""}-p${p.n}-${p.u || ""}"`;
 }
 
 async function bordersPayload(env) {
@@ -426,16 +532,15 @@ async function bordersPayload(env) {
     env.DB.prepare("SELECT state_id, data FROM provinces").all(),
   ]);
   const provById = new Map(prov.results.map((r) => [r.state_id, r.data]));
+  const isObj = (t) => typeof t === "string" && t[0] === "{" && t[t.length - 1] === "}";
   const features = [];
   for (const r of results) {
-    try {
-      const properties = { id: r.state_id };
-      // пунктир между провинциями и их названия (см. adminSaveTerritories)
-      if (provById.has(r.state_id)) { try { properties.provinces = JSON.parse(provById.get(r.state_id)); } catch { /* без провинций */ } }
-      features.push({ type: "Feature", properties, geometry: JSON.parse(r.geometry) });
-    } catch { /* битая запись пропускается */ }
+    if (!isObj(r.geometry)) continue;      // битая запись пропускается
+    // пунктир между провинциями и их названия (см. adminSaveTerritories)
+    const p = provById.get(r.state_id);
+    features.push(`{"type":"Feature","properties":{"id":${JSON.stringify(r.state_id)}${isObj(p) ? `,"provinces":${p}` : ""}},"geometry":${r.geometry}}`);
   }
-  return { type: "FeatureCollection", features };
+  return new RawJSON(`{"type":"FeatureCollection","features":[${features.join(",")}]}`);
 }
 
 /* ============================================================
@@ -450,11 +555,15 @@ function sheetIdFromLink(link) {
 
 async function adminStates(env, ctx) {
   // недоделанные копии шаблона: пробуем найти и привязать
-  for (const r of await registry(env)) {
-    if (r.sheet_id || !(await env.KV.get("pending:" + r.id))) continue;
-    try { await adminFindCopy(env, ctx, r.id); } catch { /* попробуем в следующий раз */ }
+  let regs = await registry(env);
+  const pending = await Promise.all(regs.map((r) => (r.sheet_id ? null : env.KV.get("pending:" + r.id))));
+  let found = false;
+  for (let i = 0; i < regs.length; i++) {
+    if (!pending[i]) continue;
+    try { found = (await adminFindCopy(env, ctx, regs[i].id)).found || found; } catch { /* попробуем в следующий раз */ }
   }
-  const [regs, snap] = await Promise.all([registry(env), getSnapshot(env, ctx).catch(() => ({ states: [] }))]);
+  if (found) regs = await registry(env);
+  const snap = (await getSnapshot(env, ctx).catch(() => null)) || { states: [] };
   return regs.map((r) => {
     const s = snap.states.find((x) => x.id === r.id);
     return { id: r.id, name: r.name, ruler: r.ruler, color: r.color, capital: r.capital, pantheon: r.pantheon, login: r.login,
@@ -485,21 +594,16 @@ async function adminSaveState(env, st) {
 
 async function adminDeleteState(env, stateId) {
   stateId = String(stateId || "");
-  await ensureProvinceTable(env);
+  await Promise.all([ensureProvinceTable(env), ensureSnapshotTable(env)]);
+  // из снимка — сразу, иначе государство висело бы на сайте до следующего сбора цифр
   const r = await env.DB.batch([
     env.DB.prepare("DELETE FROM states WHERE id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(stateId),
+    env.DB.prepare("DELETE FROM snapshot_states WHERE state_id = ?").bind(stateId),
   ]);
   if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
   await env.KV.delete("pending:" + stateId);
-  // убираем из снимка сразу, иначе государство висело бы на сайте до следующего сбора цифр
-  const text = await env.KV.get("snapshot");
-  if (text) {
-    const snap = JSON.parse(text);
-    snap.states = snap.states.filter((x) => x.id !== stateId);
-    await env.KV.put("snapshot", JSON.stringify(snap));
-  }
   return { ok: true };
 }
 
@@ -826,7 +930,7 @@ async function adminFindCopy(env, ctx, stateId) {
   await env.KV.delete("pending:" + id);
   const st = await env.DB.prepare("SELECT name FROM states WHERE id = ?").bind(id).first();
   await sheetsFetch(env, `/v4/spreadsheets/${f.id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: "'Статистика'!B3", values: [[st ? st.name : id]] }] }) }).catch(() => null);
-  ctx.waitUntil(refreshSnapshot(env));
+  ctx.waitUntil(refreshOneState(env, id).catch((e) => console.error(e)));
   return { ok: true, found: true, sheetId: f.id, sheetUrl: `https://docs.google.com/spreadsheets/d/${f.id}/edit` };
 }
 
@@ -872,15 +976,17 @@ async function gunzipText(b64) {
   return new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
 }
 
-async function currentTerritories(env, gridNow) {
+// Снимок {grid, borders, provinces} собирается строкой из того, что уже лежит в KV и D1 текстом:
+// разбирать и снова сериализовать сетку и контуры всех государств — лишние миллисекунды процессора.
+async function currentTerritories(env, gridText) {
   await ensureProvinceTable(env);
   const [grid, b, p] = await Promise.all([
-    gridNow ? JSON.stringify(gridNow) : env.KV.get("territory_grid"),   // KV лишь «в итоге» согласован: только что записанное берём из рук
+    gridText || env.KV.get("territory_grid"),   // KV лишь «в итоге» согласован: только что записанное берём из рук
     env.DB.prepare("SELECT state_id, geometry FROM borders").all(),
     env.DB.prepare("SELECT state_id, data FROM provinces").all(),
   ]);
-  return { grid: grid ? JSON.parse(grid) : null, borders: Object.fromEntries(b.results.map((r) => [r.state_id, JSON.parse(r.geometry)])),
-    provinces: Object.fromEntries(p.results.map((r) => [r.state_id, JSON.parse(r.data)])) };
+  const obj = (rows, col) => "{" + rows.filter((r) => typeof r[col] === "string" && r[col][0] === "{").map((r) => JSON.stringify(r.state_id) + ":" + r[col]).join(",") + "}";
+  return { states: b.results.map((r) => r.state_id), text: `{"grid":${grid || "null"},"borders":${obj(b.results, "geometry")},"provinces":${obj(p.results, "data")}}` };
 }
 
 async function saveTerritoryVersion(env, note, snap) {
@@ -888,7 +994,7 @@ async function saveTerritoryVersion(env, note, snap) {
   snap = snap || await currentTerritories(env);
   await env.DB.batch([
     env.DB.prepare("INSERT INTO territory_versions (created, note, states, data) VALUES (?1, ?2, ?3, ?4)")
-      .bind(new Date().toISOString(), note, JSON.stringify(Object.keys(snap.borders)), await gzipText(JSON.stringify(snap))),
+      .bind(new Date().toISOString(), note, JSON.stringify(snap.states), await gzipText(snap.text)),
     env.DB.prepare("DELETE FROM territory_versions WHERE id NOT IN (SELECT id FROM territory_versions ORDER BY id DESC LIMIT ?)").bind(TERRITORY_VERSIONS_KEEP),
   ]);
 }
@@ -903,7 +1009,8 @@ async function adminTerritoryRestore(env, versionId) {
   await ensureTerritoryVersions(env);
   const v = await env.DB.prepare("SELECT * FROM territory_versions WHERE id = ?").bind(Number(versionId)).first();
   if (!v) return { ok: false, error: "Версия не найдена." };
-  const snap = JSON.parse(await gunzipText(v.data));
+  const text = await gunzipText(v.data);
+  const snap = JSON.parse(text);
   await ensureProvinceTable(env);
   const now = new Date().toISOString();
   const stmts = [env.DB.prepare("DELETE FROM borders"), env.DB.prepare("DELETE FROM provinces")];
@@ -912,7 +1019,7 @@ async function adminTerritoryRestore(env, versionId) {
   await env.DB.batch(stmts);   // одна транзакция: карта не останется наполовину старой
   if (snap.grid) await env.KV.put("territory_grid", JSON.stringify(snap.grid)); else await env.KV.delete("territory_grid");
   const when = new Date(v.created).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-  await saveTerritoryVersion(env, `Откат к версии от ${when}`, snap);
+  await saveTerritoryVersion(env, `Откат к версии от ${when}`, { states: Object.keys(snap.borders || {}), text });
   return { ok: true };
 }
 
@@ -924,7 +1031,8 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
   await ensureTerritoryVersions(env);
   if (!(await env.DB.prepare("SELECT id FROM territory_versions LIMIT 1").first())) await saveTerritoryVersion(env, "Как было до истории версий");
   const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, updated: new Date().toISOString() };
-  await env.KV.put("territory_grid", JSON.stringify(gridNow));
+  const gridText = JSON.stringify(gridNow);
+  await env.KV.put("territory_grid", gridText);
   await ensureProvinceTable(env);
   const now = new Date().toISOString();
   const stmts = [];
@@ -939,7 +1047,7 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
     else stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(id));
   }
   if (stmts.length) await env.DB.batch(stmts);
-  await saveTerritoryVersion(env, "Сохранение кисти", await currentTerritories(env, gridNow)).catch((e) => console.error(e));
+  await saveTerritoryVersion(env, "Сохранение кисти", await currentTerritories(env, gridText)).catch((e) => console.error(e));
   return { ok: true };
 }
 
@@ -1078,9 +1186,12 @@ async function processTurnQueue(env) {
   await ensureTurnTables(env);
   await env.DB.prepare("UPDATE turn_jobs SET status='pending' WHERE status='running' AND started < ?").bind(new Date(Date.now() - JOB_STALE_MS).toISOString()).run();
   for (let i = 0; i < JOBS_PER_TICK; i++) {
-    // забираем задание атомарно: соседний тик cron его уже не возьмёт
+    // забираем задание атомарно: соседний тик cron его уже не возьмёт. По одному заданию за раз на весь сервер:
+    // Движок всё равно применяет ходы по очереди (ScriptLock), а параллельные тики при 10+ государствах
+    // ловили бы «Движок занят» и падали в ошибку.
     const job = await env.DB.prepare(`UPDATE turn_jobs SET status='running', started=?1
-        WHERE id = (SELECT id FROM turn_jobs WHERE status='pending' ORDER BY id LIMIT 1) AND status='pending' RETURNING *`)
+        WHERE id = (SELECT id FROM turn_jobs WHERE status='pending' ORDER BY id LIMIT 1) AND status='pending'
+          AND NOT EXISTS (SELECT 1 FROM turn_jobs WHERE status='running') RETURNING *`)
       .bind(new Date().toISOString()).first();
     if (!job) return;
     await runTurnJob(env, job);
