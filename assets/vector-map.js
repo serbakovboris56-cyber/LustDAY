@@ -42,11 +42,31 @@
     return p;
   }
   const hit = (b, v) => b[0] <= v[2] && b[2] >= v[0] && b[1] <= v[3] && b[3] >= v[1];
+  // Кольцо с рамкой и готовым Path2D: плитка не обводит точки заново, а только склеивает готовые пути.
+  function ringItem(r) {
+    const p = new Path2D();
+    ringPath(r, p);
+    return { b: bboxOf(r), r, p };
+  }
+  // Длинные контуры (материк — десятки тысяч точек) режем на куски для обводки:
+  // каждая плитка обводит только куски рядом с собой, а не весь берег.
+  function strokeChunks(rings, size) {
+    const out = [];
+    for (const r of rings) {
+      for (let i = 0; i < r.length - 1; i += size) {
+        const part = r.slice(i, Math.min(r.length, i + size + 1));
+        if (i + size + 1 >= r.length) part.push(r[0]);           // замыкаем кольцо
+        out.push({ b: bboxOf(part), p: linePath(part) });
+      }
+    }
+    return out;
+  }
 
   // Готовим данные один раз: Path2D + рамки, чтобы каждая плитка брала только своё.
   function prepare(data) {
-    const landRings = data.water[0].slice(1).map((r) => ({ b: bboxOf(r), r }));
-    const lakes = data.water.slice(1).flat().map((r) => ({ b: bboxOf(r), r }));
+    const landRings = data.water[0].slice(1).map(ringItem);
+    const coastChunks = strokeChunks(data.water[0].slice(1), 400);
+    const lakes = data.water.slice(1).flat().map(ringItem);
     // Контуры озёр для обводки: в экспорте Figma часть водных фигур замыкается длинными прямыми — их не рисуем.
     const lakeLines = lakes.map((it) => {
       const p = new Path2D(), r = it.r;
@@ -57,16 +77,16 @@
       }
       return { b: it.b, p };
     });
-    const biomes = data.biomes.map((bm) => ({ key: bm.key, name: bm.name, rings: bm.rings.map((r) => ({ b: bboxOf(r), r })) }));
+    const biomes = data.biomes.map((bm) => ({ key: bm.key, name: bm.name, rings: bm.rings.map(ringItem) }));
     const rivers = data.rivers.map(([w, c]) => ({ w, b: bboxOf(c), p: linePath(c) }));
     const mountains = data.mountains.map(([x, y, s, k]) => ({ x, y, s, k, b: [x - s, y - s, x + s, y + s] }));
-    return { landRings, lakes, lakeLines, biomes, rivers, mountains };
+    return { landRings, coastChunks, lakes, lakeLines, biomes, rivers, mountains };
   }
 
   function pathFor(items, view) {
     const p = new Path2D();
     let any = false;
-    for (const it of items) if (hit(it.b, view)) { ringPath(it.r, p); any = true; }
+    for (const it of items) if (hit(it.b, view)) { p.addPath(it.p); any = true; }
     return any ? p : null;
   }
 
@@ -100,24 +120,69 @@
 
   function createVectorLayer(map, data, nativeZ) {
     const D = prepare(data);
-    let territories = [];      // [{color, rings: [{b, r}]}]
+    let territories = [];      // [{id, color, selected, rings: [{b, r, p}], box, provLines, provBox}]
+    let lastFeatures = [];
+    const prepared = new WeakMap();   // GeoJSON Feature -> готовые кольца (пересчёт только при новых границах)
+
+    /* Плитки рисуются не все разом, а очередью по ~10 мс за кадр: при зуме и прокрутке карта не замирает.
+     * Ближние к центру экрана плитки Leaflet запрашивает первыми, они и рисуются первыми. */
+    const queue = [];
+    let scheduled = false;
+    function schedule() {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(pump);
+    }
+    function pump() {
+      scheduled = false;
+      const until = performance.now() + 10;
+      while (queue.length && performance.now() < until) {
+        const job = queue.shift();
+        // плитку уже убрали (ушли с этого места или зума) — не рисуем
+        if (job.tile.parentNode) paintTile(job.tile, job.coords);
+        if (job.done) job.done(null, job.tile);
+      }
+      if (queue.length) schedule();
+    }
+    function tileView(coords, size) {
+      const k = Math.pow(2, coords.z - nativeZ);                 // экранных пикселей на пиксель карты
+      const ox = (coords.x * size.x) / k, oy = (coords.y * size.y) / k;
+      const pad = 120 / k;
+      return { k, ox, oy, view: [ox - pad, oy - pad, ox + size.x / k + pad, oy + size.y / k + pad] };
+    }
+    function paintTile(tile, coords) {
+      const size = layer.getTileSize();
+      const dpr = tile.width / size.x;
+      const { k, ox, oy, view } = tileView(coords, size);
+      const ctx = tile.getContext("2d");
+      ctx.setTransform(k * dpr, 0, 0, k * dpr, -ox * k * dpr, -oy * k * dpr);
+      draw(ctx, k, view);
+    }
 
     const Layer = L.GridLayer.extend({
-      createTile(coords) {
+      createTile(coords, done) {
         const tile = document.createElement("canvas");
         const size = this.getTileSize();
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         tile.width = size.x * dpr; tile.height = size.y * dpr;
-        const ctx = tile.getContext("2d");
-        const k = Math.pow(2, coords.z - nativeZ);                 // экранных пикселей на пиксель карты
-        const ox = (coords.x * size.x) / k, oy = (coords.y * size.y) / k;
-        const pad = 120 / k;
-        const view = [ox - pad, oy - pad, ox + size.x / k + pad, oy + size.y / k + pad];
-        ctx.setTransform(k * dpr, 0, 0, k * dpr, -ox * k * dpr, -oy * k * dpr);
-        draw(ctx, k, view);
+        queue.push({ tile, coords, done });
+        schedule();
         return tile;
       },
     });
+
+    // Перерисовать на месте уже показанные плитки, задевающие рамки boxes (null — все), без мигания.
+    function repaint(boxes) {
+      const size = layer.getTileSize();
+      const tiles = layer._tiles || {};
+      for (const key in tiles) {
+        const t = tiles[key];
+        if (!t.current || !t.loaded) continue;
+        if (boxes && !boxes.some((b) => hit(b, tileView(t.coords, size).view))) continue;
+        if (!queue.some((j) => j.tile === t.el)) queue.push({ tile: t.el, coords: t.coords, done: null });
+      }
+      schedule();
+    }
 
     function draw(ctx, k, view) {
       ctx.fillStyle = STYLE.ocean;
@@ -125,8 +190,10 @@
       const land = pathFor(D.landRings, view);
       if (!land) return;
 
-      // мелководье — светлая кайма вдоль берега
-      ctx.strokeStyle = STYLE.oceanShelf; ctx.lineWidth = 34; ctx.lineJoin = "round"; ctx.stroke(land);
+      // мелководье — светлая кайма вдоль берега (обводим только куски берега возле плитки)
+      ctx.strokeStyle = STYLE.oceanShelf; ctx.lineWidth = 34; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      for (const c of D.coastChunks) if (hit(c.b, view)) ctx.stroke(c.p);
+      ctx.lineCap = "butt";
 
       ctx.save();
       ctx.clip(land, "evenodd");
@@ -138,6 +205,7 @@
       // заливка территорий — под горами и реками
       const visible = [];
       for (const t of territories) {
+        if (!hit(t.box, view)) continue;
         const p = pathFor(t.rings, view);
         if (!p) continue;
         visible.push({ p, color: t.color, selected: t.selected });
@@ -173,29 +241,50 @@
       const lakes = pathFor(D.lakes, view);
       if (lakes) { ctx.fillStyle = STYLE.lake; ctx.fill(lakes, "nonzero"); }
       ctx.strokeStyle = STYLE.coast; ctx.lineWidth = 1.1 / k;
-      ctx.stroke(land);
+      for (const c of D.coastChunks) if (hit(c.b, view)) ctx.stroke(c.p);
       for (const l of D.lakeLines) if (hit(l.b, view)) ctx.stroke(l.p);
     }
 
     const layer = new Layer({ tileSize: 256, noWrap: true, minZoom: 0, maxZoom: nativeZ + 1, keepBuffer: 3, updateWhenZooming: false });
     layer.addTo(map);
 
+    function prepareFeature(f) {
+      let g = prepared.get(f);
+      if (g) return g;
+      const geom = f.geometry, polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+      const rings = polys.flat().filter((r) => r.length >= 3).map(ringItem);
+      const pv = f.properties.provinces, lines = pv && Array.isArray(pv.lines) ? pv.lines.filter((l) => l.length >= 2) : [];
+      const provLines = lines.length ? new Path2D() : null;
+      lines.forEach((l) => provLines.addPath(linePath(l)));
+      const box = rings.length ? rings.reduce((a, it) => [Math.min(a[0], it.b[0]), Math.min(a[1], it.b[1]), Math.max(a[2], it.b[2]), Math.max(a[3], it.b[3])], [Infinity, Infinity, -Infinity, -Infinity]) : null;
+      g = { rings, box, provLines, provBox: lines.length ? bboxOf(lines.flat()) : null };
+      prepared.set(f, g);
+      return g;
+    }
+
     return {
       layer,
-      // features: GeoJSON Feature[] с properties.id; colors: id -> {color, selected}
+      // features: GeoJSON Feature[] с properties.id; info(id) -> {color, selected}.
+      // Если границы те же, а сменились только цвет или выбор, перерисовываются лишь плитки этих государств.
       setTerritories(features, info) {
-        territories = features.map((f) => {
-          const g = f.geometry, polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
-          const rings = polys.flat().map((r) => ({ b: bboxOf(r), r }));
+        const old = new Map(territories.map((t) => [t.feature, t]));
+        const sameShapes = features === lastFeatures || (features.length === lastFeatures.length && features.every((f, i) => f === lastFeatures[i]));
+        lastFeatures = features;
+        const next = features.map((f) => {
+          const g = prepareFeature(f);
           const i = info(f.properties.id) || {};
-          const pv = f.properties.provinces, lines = pv && Array.isArray(pv.lines) ? pv.lines.filter((l) => l.length >= 2) : [];
-          const provLines = lines.length ? new Path2D() : null;
-          lines.forEach((l) => provLines.addPath(linePath(l)));
-          return { id: f.properties.id, color: i.color || "#FFD700", selected: !!i.selected, rings, provLines, provBox: lines.length ? bboxOf(lines.flat()) : null };
+          return { feature: f, id: f.properties.id, color: i.color || "#FFD700", selected: !!i.selected, ...g };
         }).filter((t) => t.rings.length);
-        layer.redraw();
+        if (!sameShapes) { territories = next; repaint(null); return; }
+        const changed = [];
+        for (const t of next) {
+          const o = old.get(t.feature);
+          if (!o || o.color !== t.color || o.selected !== t.selected) changed.push(t.box);
+        }
+        territories = next;
+        if (changed.length) repaint(changed);
       },
-      redraw() { layer.redraw(); },
+      redraw() { repaint(null); },
     };
   }
 

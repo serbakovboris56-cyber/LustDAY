@@ -125,19 +125,44 @@
     return filled;
   }
 
-  function gridToGeometry(owner, land, idx, W, H) {
-    const values = new Float64Array(W * H);
+  /* Рамки клеток каждого государства (индекс 1..n) с запасом margin клеток: контуры строятся только внутри
+   * своей рамки, а не по всей сетке 1703×845 — при 10+ государствах и провинциях сохранение в разы быстрее. */
+  function cellBoxes(owner, count, W, H, margin) {
+    const boxes = Array.from({ length: count + 1 }, () => null);
+    for (let y = 0, i = 0; y < H; y++) {
+      for (let x = 0; x < W; x++, i++) {
+        const o = owner[i];
+        if (!o || o > count) continue;
+        const b = boxes[o];
+        if (!b) boxes[o] = [x, y, x, y];
+        else { if (x < b[0]) b[0] = x; if (x > b[2]) b[2] = x; if (y < b[1]) b[1] = y; if (y > b[3]) b[3] = y; }
+      }
+    }
+    return boxes.map((b) => b && [Math.max(0, b[0] - margin), Math.max(0, b[1] - margin), Math.min(W - 1, b[2] + margin), Math.min(H - 1, b[3] + margin)]);
+  }
+
+  // Контур значений, заданных в рамке box, — в координатах всей сетки (клетки).
+  function boxContours(values, box) {
+    const [x0, y0, x1, y1] = box;
+    const mp = window.d3.contours().size([x1 - x0 + 1, y1 - y0 + 1]).thresholds([0.5])(values)[0];
+    return mp.coordinates.map((poly) => poly.map((ring) => ring.map(([x, y]) => [x + x0, y + y0])));
+  }
+
+  function gridToGeometry(owner, land, idx, W, H, box) {
+    if (!box) return null;
+    const [x0, y0, x1, y1] = box, w = x1 - x0 + 1;
+    const values = new Float64Array(w * (y1 - y0 + 1));
     let any = false;
-    for (let i = 0; i < owner.length; i++) if (owner[i] === idx) { values[i] = 1; any = true; }
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (owner[y * W + x] === idx) { values[(y - y0) * w + x - x0] = 1; any = true; }
     if (!any) return null;
     // клетка моря вокруг суши государства: на карте заливка обрезается по берегу и доходит до кромки
-    for (let i = 0; i < owner.length; i++) {
-      if (land[i] || values[i]) continue;
-      eachNeighbor(i, W, H, (j) => { if (owner[j] === idx) values[i] = 0.75; });
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const i = y * W + x, v = (y - y0) * w + x - x0;
+      if (land[i] || values[v]) continue;
+      eachNeighbor(i, W, H, (j) => { if (owner[j] === idx) values[v] = 0.75; });
     }
-    const mp = window.d3.contours().size([W, H]).thresholds([0.5])(values)[0];
     const polys = [];
-    for (const poly of mp.coordinates) {
+    for (const poly of boxContours(values, box)) {
       const rings = [];
       for (const ring of poly) {
         const pts = simplify(ring, 0.5).map(([x, y]) => [Math.round(x * CELL), Math.round(y * CELL)]);
@@ -157,11 +182,12 @@
   /* Линии между провинциями одного государства: контур каждой провинции, из которого оставлены только участки,
    * где по другую сторону — другая провинция того же государства (каждая общая граница берётся один раз).
    * Возвращает { lines: [[[x, y], …], …], labels: [{name, x, y}] } в пикселях исходной карты или null. */
-  function provinceLines(owner, prov, idx, names, W, H) {
-    const N = W * H, count = names.length;
-    if (count < 2) return null;
+  function provinceLines(owner, prov, idx, names, W, H, box) {
+    const count = names.length;
+    if (count < 2 || !box) return null;
+    const [x0, y0, x1, y1] = box, bw = x1 - x0 + 1;
     const cells = Array.from({ length: count + 1 }, () => []);
-    for (let i = 0; i < N; i++) if (owner[i] === idx) cells[Math.min(count, provOf(prov, i))].push(i);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * W + x; if (owner[i] === idx) cells[Math.min(count, provOf(prov, i))].push(i); }
     const used = cells.filter((c) => c.length).length;
     if (used < 2) return null;
     const cellAt = (x, y) => {
@@ -169,14 +195,13 @@
       return cx >= 0 && cy >= 0 && cx < W && cy < H ? cy * W + cx : -1;
     };
     const lines = [], labels = [];
-    const values = new Float64Array(N);
+    const values = new Float64Array(bw * (y1 - y0 + 1));
     for (let p = 1; p <= count; p++) {
       if (!cells[p].length) continue;
       values.fill(0);
-      for (const i of cells[p]) values[i] = 1;
-      const mp = window.d3.contours().size([W, H]).thresholds([0.5])(values)[0];
+      for (const i of cells[p]) values[(Math.floor(i / W) - y0) * bw + (i % W) - x0] = 1;
       let best = null;
-      for (const poly of mp.coordinates) {
+      for (const poly of boxContours(values, box)) {
         for (const ring of poly) {
           // участок ring[k] → ring[k+1] — граница с провинцией с бо́льшим номером?
           const n = ring.length - 1, div = new Uint8Array(n);
@@ -448,9 +473,10 @@
         await new Promise((r) => setTimeout(r, 30));
         fillGaps(owner, land, W, H);
         const geometries = {}, provinces = {};
+        const boxes = cellBoxes(owner, owners.length, W, H, 2);
         owners.forEach((id, i) => {
-          geometries[id] = gridToGeometry(owner, land, i + 1, W, H);
-          provinces[id] = geometries[id] && provNames.has(id) ? provinceLines(owner, prov, i + 1, provNames.get(id), W, H) : null;
+          geometries[id] = gridToGeometry(owner, land, i + 1, W, H, boxes[i + 1]);
+          provinces[id] = geometries[id] && provNames.has(id) ? provinceLines(owner, prov, i + 1, provNames.get(id), W, H, boxes[i + 1]) : null;
         });
         msg("Сохраняю…");
         const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) } };
