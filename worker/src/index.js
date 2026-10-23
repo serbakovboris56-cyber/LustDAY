@@ -80,7 +80,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminFindCopy": await requireAdmin(env, body.token); return adminFindCopy(env, ctx, body.stateId);
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
     case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
-    case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries);
+    case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries, body.provinces);
     case "adminTurnBoard": await requireAdmin(env, body.token); return adminTurnBoard(env, ctx);
     case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn);
     case "adminEngine": await requireAdmin(env, body.token); return adminEngine(env, body.stateId, body.op, body);
@@ -414,10 +414,20 @@ async function publicPayload(env, ctx) {
 }
 
 async function bordersPayload(env) {
-  const { results } = await env.DB.prepare("SELECT state_id, geometry FROM borders").all();
+  await ensureProvinceTable(env);
+  const [{ results }, prov] = await Promise.all([
+    env.DB.prepare("SELECT state_id, geometry FROM borders").all(),
+    env.DB.prepare("SELECT state_id, data FROM provinces").all(),
+  ]);
+  const provById = new Map(prov.results.map((r) => [r.state_id, r.data]));
   const features = [];
   for (const r of results) {
-    try { features.push({ type: "Feature", properties: { id: r.state_id }, geometry: JSON.parse(r.geometry) }); } catch { /* битая запись пропускается */ }
+    try {
+      const properties = { id: r.state_id };
+      // пунктир между провинциями и их названия (см. adminSaveTerritories)
+      if (provById.has(r.state_id)) { try { properties.provinces = JSON.parse(provById.get(r.state_id)); } catch { /* без провинций */ } }
+      features.push({ type: "Feature", properties, geometry: JSON.parse(r.geometry) });
+    } catch { /* битая запись пропускается */ }
   }
   return { type: "FeatureCollection", features };
 }
@@ -469,9 +479,11 @@ async function adminSaveState(env, st) {
 
 async function adminDeleteState(env, stateId) {
   stateId = String(stateId || "");
+  await ensureProvinceTable(env);
   const r = await env.DB.batch([
     env.DB.prepare("DELETE FROM states WHERE id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(stateId),
+    env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(stateId),
   ]);
   if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
   await env.KV.delete("pending:" + stateId);
@@ -695,11 +707,32 @@ async function adminFindCopy(env, ctx, stateId) {
   return { ok: true, found: true, sheetId: f.id, sheetUrl: `https://docs.google.com/spreadsheets/d/${f.id}/edit` };
 }
 
-// Кисть территорий: сетка клеток хранится в KV, контуры государств — в таблице borders.
-async function adminSaveTerritories(env, grid, geometries) {
+// Провинции (регионы) внутри государства: линии-пунктир между ними и точки для названий, по строке на государство.
+let provinceTableReady = false;
+async function ensureProvinceTable(env) {
+  if (provinceTableReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS provinces (state_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated TEXT NOT NULL)").run();
+  provinceTableReady = true;
+}
+
+// Оставляет от присланного только линии из чисел и подписи {name, x, y}.
+function cleanProvinces(p) {
+  if (!p || typeof p !== "object" || !Array.isArray(p.lines)) return null;
+  const num = (v) => Number.isFinite(v);
+  const lines = p.lines.filter((l) => Array.isArray(l) && l.length >= 2 && l.every((pt) => Array.isArray(pt) && pt.length === 2 && num(pt[0]) && num(pt[1])));
+  if (!lines.length) return null;
+  const labels = (Array.isArray(p.labels) ? p.labels : []).filter((x) => x && num(x.x) && num(x.y))
+    .map((x) => ({ name: String(x.name || "").slice(0, 60), x: x.x, y: x.y }));
+  return { lines, labels };
+}
+
+// Кисть территорий: сетка клеток (с провинциями) хранится в KV, контуры государств — в borders, провинции — в provinces.
+async function adminSaveTerritories(env, grid, geometries, provinces) {
   if (!grid || !Array.isArray(grid.rle) || !Array.isArray(grid.owners)) return { ok: false, error: "Нет данных сетки." };
   if (!geometries || typeof geometries !== "object") return { ok: false, error: "Нет контуров." };
-  await env.KV.put("territory_grid", JSON.stringify({ w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, updated: new Date().toISOString() }));
+  const prov = grid.prov && Array.isArray(grid.prov.rle) ? { rle: grid.prov.rle, names: grid.prov.names || {} } : undefined;
+  await env.KV.put("territory_grid", JSON.stringify({ w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, updated: new Date().toISOString() }));
+  await ensureProvinceTable(env);
   const now = new Date().toISOString();
   const stmts = [];
   for (const [id, geom] of Object.entries(geometries)) {
@@ -708,6 +741,9 @@ async function adminSaveTerritories(env, grid, geometries) {
     } else {
       stmts.push(env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(id));
     }
+    const p = geom && provinces && typeof provinces === "object" ? cleanProvinces(provinces[id]) : null;
+    if (p) stmts.push(env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET data=?2, updated=?3").bind(id, JSON.stringify(p), now));
+    else stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(id));
   }
   if (stmts.length) await env.DB.batch(stmts);
   return { ok: true };
