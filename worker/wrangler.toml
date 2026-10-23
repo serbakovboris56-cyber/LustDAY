@@ -8,9 +8,9 @@ compatibility_date = "2026-10-01"
 [vars]
 ALLOWED_ORIGINS = "https://serbakovboris56-cyber.github.io,http://localhost:8000,http://localhost:8765"
 
-# Сбор свежих цифр из таблиц — каждые 10 минут
+# Сбор свежих цифр из таблиц — каждые 10 минут; очередь «Нового хода» — каждую минуту
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/10 * * * *", "* * * * *"]
 
 [[d1_databases]]
 binding = "DB"

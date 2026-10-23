@@ -32,3 +32,26 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 INSERT OR IGNORE INTO settings (key, value) VALUES ('season', 'Средневековье'), ('start_year', '1200');
+
+-- Вкладка «Ход»: галочка «данные хода заполнены» на конкретный номер хода (после хода она сама перестаёт действовать)
+CREATE TABLE IF NOT EXISTS turn_marks (
+  state_id TEXT PRIMARY KEY,
+  turn     INTEGER NOT NULL,
+  ready    INTEGER NOT NULL DEFAULT 0,
+  updated  TEXT NOT NULL
+);
+
+-- Очередь «Нового хода»: одно задание — одно государство; разбирает минутный cron через Движок
+CREATE TABLE IF NOT EXISTS turn_jobs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch         TEXT NOT NULL,
+  state_id      TEXT NOT NULL,
+  expected_turn INTEGER NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | error
+  error         TEXT NOT NULL DEFAULT '',
+  backup        TEXT NOT NULL DEFAULT '',          -- ссылка на копию таблицы перед ходом
+  created       TEXT NOT NULL,
+  started       TEXT NOT NULL DEFAULT '',
+  finished      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status);
