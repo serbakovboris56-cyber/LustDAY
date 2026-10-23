@@ -120,6 +120,7 @@
   map.attributionControl.addAttribution("Карта мира ВПИ");
   let vector = null;           // векторная карта (assets/vector-map.js)
   let mountains = [];          // значки гор из map.json: дороги к деревням обходят горы
+  let lakes = [];              // кольца озёр из map.json: дороги не идут по воде
   let bordersGeo = { type: "FeatureCollection", features: [] };
 
   function fitWorld() {
@@ -1482,7 +1483,7 @@
     labelsLayer.clearLayers();
     provinceLabels.clearLayers();
     window.VPITerritoryEditor.open({
-      map, nativeZ: NATIVE_Z, mountains,
+      map, nativeZ: NATIVE_Z, mountains, lakes,
       states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
@@ -1522,6 +1523,7 @@
     const mapReady = getJSON("assets/map.json").then((mapData) => {
       vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
       mountains = mapData.mountains || [];
+      lakes = (mapData.water || []).slice(1).flat();
     }).catch((err) => console.error("Карта не загрузилась", err));
     const geoReady = api.borders().catch((err) => { console.error("Границы не загрузились", err); return null; });
     try {

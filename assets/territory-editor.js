@@ -263,7 +263,7 @@
   /**
    * opts: { map, nativeZ, states: [{id, name, color}], loadGrid(): Promise<grid|null>, borders: GeoJSON,
    *         loadRegions(stateId): Promise<string[]>, save({grid, geometries, provinces}): Promise, onClose(saved),
-   *         mountains: [[x, y, size, kind]] из map.json — дороги их обходят }
+   *         mountains: [[x, y, size, kind]] из map.json — дороги их обходят, lakes — кольца озёр (дороги не идут по воде) }
    */
   async function open(opts) {
     const { map, nativeZ } = opts;
@@ -395,7 +395,7 @@
     }
     // Режим «Города»: значок на месте города каждой провинции (золотой — поставлен админом)
     const cityLayer = L.layerGroup();
-    const settleOpts = () => ({ owner, prov, land, W, H, owners, names: (id) => provNames.get(id), cities, mountains: opts.mountains || [] });
+    const settleOpts = () => ({ owner, prov, land, W, H, owners, names: (id) => provNames.get(id), cities, mountains: opts.mountains || [], lakes: opts.lakes || [] });
     function drawCities() {
       cityLayer.clearLayers();
       if (!window.VPISettlements) return;
