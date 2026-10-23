@@ -22,6 +22,7 @@
   <div class="bar__actions">
     <span class="bar__who" id="whoami"></span>
     <button class="btn btn--ghost" id="brushBtn" type="button" hidden>Территории</button>
+    <button class="btn btn--ghost" id="turnBtn" type="button" hidden>Ход</button>
     <button class="btn btn--ghost" id="adminBtn" type="button" hidden>Управление</button>
     <button class="btn" id="loginBtn" type="button">Войти</button>
   </div>
@@ -104,8 +105,11 @@
       <label>Почта администратора (доступ к новым таблицам) <input name="admin_email" type="email"></label>
       <label>Сезон <input name="season"></label>
       <label>Год начала <input name="start_year" type="number"></label>
+      <label>Адрес Движка хода <input name="engine_url" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label>Ключ Движка <input name="engine_secret" type="password" autocomplete="off" placeholder="из журнала setupEngine"></label>
+      <p class="admin__wide login__hint" id="engineInfo">Движок применяет ход в таблицах по кнопке на вкладке «Ход». Как его установить — engine/README.md в репозитории сайта.</p>
       <p class="admin__wide login__hint" id="saInfo"></p>
-      <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сохранить настройки</button></div>
+      <div class="admin__wide admin__links"><button class="btn btn--ghost" type="submit">Сохранить настройки</button> <button class="btn btn--ghost" type="button" id="enginePing">Проверить Движок</button></div>
     </form>
 
     <form id="adminPassword" class="admin__add">
@@ -115,6 +119,58 @@
       <div class="admin__wide"><button class="btn btn--ghost" type="submit">Сменить пароль</button></div>
     </form>
   </div>
+</dialog>
+
+<dialog class="login admin" id="turnDialog">
+  <div class="login__form">
+    <div class="admin__head">
+      <h2 id="turnTitle">Ход</h2>
+      <button class="panel__close" id="turnClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <p class="login__hint">Заполните данные хода каждого государства (приказ, расходы в «Цифрах»), проверьте «Превью» и поставьте галочку. «Новый ход» откроется, когда галочки стоят у всех.</p>
+    <div class="admin__links"><button class="btn btn--ghost" id="turnRefresh" type="button">Обновить цифры из таблиц</button></div>
+    <p class="login__error" id="turnMsg" role="status"></p>
+    <div id="turnList"><p class="loading">Загружаю…</p></div>
+    <div class="turn__foot">
+      <p class="login__hint" id="turnFootHint"></p>
+      <button class="btn btn--danger" id="turnAllBtn" type="button" disabled>Новый ход</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="login admin" id="previewDialog">
+  <div class="login__form">
+    <div class="admin__head">
+      <h2 id="previewTitle">Превью хода</h2>
+      <button class="panel__close" id="previewClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <div id="previewBody"><p class="loading">Движок считает ход…</p></div>
+    <form id="orderForm" class="admin__add">
+      <h3>Приказ и вердикт</h3>
+      <label class="admin__wide">Приказ (ссылка на пост или текст) <input name="orderText" placeholder="https://vk.com/wall-…"></label>
+      <label class="admin__wide">Вердикт (ссылка или текст) <input name="verdictText" placeholder="https://vk.com/wall-…"></label>
+      <p class="admin__wide login__hint">Записывается на лист «Приказы» таблицы, расходы берутся из «Цифр».</p>
+      <div class="admin__wide"><button class="btn btn--ghost" type="submit">Записать приказ</button></div>
+    </form>
+    <p class="login__error" id="previewMsg" role="status"></p>
+    <div class="login__actions">
+      <label class="confirm__check"><input type="checkbox" id="previewReady"> Данные хода заполнены</label>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="login confirm" id="newTurnDialog">
+  <form class="login__form" id="newTurnForm">
+    <label class="confirm__check confirm__check--top"><input type="checkbox" name="c1"> Все приказы учтены</label>
+    <h2>Начать новый ход?</h2>
+    <p class="login__hint" id="newTurnText"></p>
+    <p class="login__error" id="newTurnMsg" role="alert"></p>
+    <div class="login__actions confirm__actions">
+      <button class="btn btn--ghost" id="newTurnCancel" type="button">Отмена</button>
+      <button class="btn btn--danger" id="newTurnGo" type="submit" disabled>Начать ход</button>
+    </div>
+    <label class="confirm__check confirm__check--bottom"><input type="checkbox" name="c2"> Понимаю, что ход не отменить</label>
+  </form>
 </dialog>
 
 <dialog class="login confirm" id="deleteDialog">
@@ -137,7 +193,7 @@
       <h2 id="statsTitle">Статистика</h2>
       <button class="panel__close" id="statsClose" type="button" aria-label="Закрыть">×</button>
     </div>
-    <p class="login__hint">Здесь меняются ячейки ввода таблицы «Хроники». Всё остальное таблица пересчитает сама. Ход по-прежнему применяется в таблице через «Мастер хода».</p>
+    <p class="login__hint">Здесь меняются ячейки ввода таблицы «Хроники». Всё остальное таблица пересчитает сама. Ход применяется на вкладке «Ход» или в таблице через «Мастер хода».</p>
     <div id="statsBody"><p class="loading">Читаю таблицу…</p></div>
     <p class="login__error" id="statsMsg" role="status"></p>
     <div class="login__actions">

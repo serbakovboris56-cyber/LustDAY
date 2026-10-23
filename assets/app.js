@@ -403,6 +403,7 @@
     $("#loginBtn").textContent = ses ? "Выйти" : "Войти";
     $("#loginBtn").classList.toggle("btn--ghost", !!ses);
     $("#adminBtn").hidden = !(ses && ses.role === "admin");
+    $("#turnBtn").hidden = !(ses && ses.role === "admin");
     $("#brushBtn").hidden = !(ses && ses.role === "admin");
     $("#whoami").textContent = !ses ? "" : ses.role === "admin" ? "Администратор" : own ? own.name : "";
   }
@@ -642,6 +643,9 @@
       f.admin_email.value = info.settings.admin_email || "";
       f.season.value = info.settings.season || "";
       f.start_year.value = info.settings.start_year || "1200";
+      f.engine_url.value = info.settings.engine_url || "";
+      f.engine_secret.value = "";
+      f.engine_secret.placeholder = info.engineSecretSet ? "задан — впишите, чтобы заменить" : "из журнала setupEngine";
       $("#saInfo").textContent = info.serviceAccount ? `Робот Google: ${info.serviceAccount}. Откройте ему шаблон и таблицы государств с правом «Редактор».` : "Ключ Google не задан.";
     } catch (err) { $("#saInfo").textContent = err.message; }
   }
@@ -650,7 +654,16 @@
     try {
       await api.admin("adminSaveSettings", { settings: Object.fromEntries(new FormData(e.target).entries()) });
       adminMsg("Настройки сохранены.");
+      loadSettings();
     } catch (err) { adminMsg(err.message, true); }
+  });
+
+  $("#enginePing").addEventListener("click", async () => {
+    $("#engineInfo").textContent = "Проверяю Движок…";
+    try {
+      const d = await api.admin("adminEngine", { op: "ping" });
+      $("#engineInfo").textContent = d.ok ? `Движок отвечает, версия ${d.version}.` : d.error;
+    } catch (err) { $("#engineInfo").textContent = err.message; }
   });
 
   $("#adminPassword").addEventListener("submit", async (e) => {
@@ -773,6 +786,178 @@
       if (state.selected === statsState) renderPanel(state.byId.get(statsState));
     } catch (err) { $("#statsMsg").textContent = err.message; }
     finally { btn.disabled = false; }
+  });
+
+  /* ---------------- вкладка «Ход» ---------------- */
+  // Галочки и «Новый ход» живут на сервере (D1), ход применяет Движок — веб-приложение Apps Script администратора.
+  let turnBoard = null, turnPoll = null, previewId = null;
+  const JOB_TEXT = { pending: "в очереди", running: "применяется…", done: "применён", error: "ошибка" };
+  function turnMsg(text, isError) {
+    const m = $("#turnMsg");
+    m.textContent = text || "";
+    m.classList.toggle("is-error", !!isError);
+  }
+  function demoBoard() {
+    const rows = ((state.data && state.data.states) || []).map((s, i) => ({
+      id: s.id, name: s.name, color: s.color, sheetId: "", turn: state.data.turn, nextTurn: state.data.turn + 1,
+      ready: i % 2 === 0, blocking: false, problems: i === 1 ? ["казна в минусе"] : [], crises: [], job: null,
+    }));
+    return { ok: true, engine: false, rows, busy: false, demo: true };
+  }
+  async function openTurn() {
+    if (!$("#turnDialog").open) { $("#turnDialog").showModal(); turnMsg(""); }
+    await loadTurnBoard();
+  }
+  async function loadTurnBoard() {
+    try {
+      turnBoard = DEMO ? demoBoard() : await api.admin("adminTurnBoard");
+      renderTurnBoard();
+    } catch (err) {
+      $("#turnList").innerHTML = `<div class="crisis">${esc(err.message)}</div>`;
+      $("#turnAllBtn").disabled = true;
+    }
+    clearTimeout(turnPoll);
+    // пока идёт «Новый ход», обновляем статусы сами
+    if (turnBoard && turnBoard.busy && $("#turnDialog").open) turnPoll = setTimeout(loadTurnBoard, 15000);
+  }
+  function renderTurnBoard() {
+    const b = turnBoard, rows = b.rows;
+    const turns = [...new Set(rows.map((r) => r.nextTurn).filter((t) => t !== null))];
+    $("#turnTitle").textContent = turns.length === 1 ? `Ход ${turns[0]}` : "Ход";
+    $("#turnList").innerHTML = rows.length ? `
+      <table class="admin-table turn-table">
+        <thead><tr><th>Государство</th><th>Ход</th><th>Проверка</th><th>Готово</th></tr></thead>
+        <tbody>${rows.map((r) => {
+          // итог последнего «Нового хода» показываем, пока он идёт, при ошибке и сразу после хода
+          const job = r.job && (b.busy || r.job.status === "error" || r.job.turn === r.turn) ? r.job : null;
+          return `
+          <tr>
+            <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}
+              <div class="admin__links">${r.sheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}
+                <button type="button" class="linklike" data-tstats="${esc(r.id)}">Цифры</button>
+                <button type="button" class="linklike" data-tpreview="${esc(r.id)}">Превью</button></div></td>
+            <td>${r.turn === null ? "—" : `${r.turn} → ${r.nextTurn}`}
+              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc(JOB_TEXT[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
+                ${job.backup ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}
+                ${job.status === "error" ? ` <button type="button" class="linklike" data-tretry="${job.id}">Повторить</button>` : ""}</div>` : ""}</td>
+            <td class="${r.problems.length ? "balance--deficit" : "balance--surplus"}">${r.problems.length ? r.problems.map(esc).join("<br>") : "в порядке"}
+              ${r.crises.length ? `<div class="muted">Кризисы: ${r.crises.map(esc).join(", ")}</div>` : ""}</td>
+            <td><label class="confirm__check"><input type="checkbox" data-tready="${esc(r.id)}" ${r.ready ? "checked" : ""} ${r.nextTurn === null || b.busy ? "disabled" : ""}> заполнено</label></td>
+          </tr>`; }).join("")}
+        </tbody>
+      </table>` : `<p class="muted">Действующих государств нет.</p>`;
+    const missing = rows.filter((r) => !r.ready);
+    const blocked = rows.filter((r) => r.blocking);
+    let hint = "";
+    if (b.demo) hint = "Демо-режим: ход не применяется.";
+    else if (!b.engine) hint = "Движок не подключён: «Управление» → «Настройки» → адрес и ключ Движка.";
+    else if (b.busy) hint = "Новый ход идёт: государства обрабатываются по очереди, примерно по минуте на каждое. Окно можно закрыть.";
+    else if (blocked.length) hint = "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ");
+    else if (missing.length) hint = `Нет галочки у: ${missing.map((r) => r.name).join(", ")}`;
+    else hint = "Все государства готовы.";
+    $("#turnFootHint").textContent = hint;
+    $("#turnAllBtn").disabled = !!(b.demo || !b.engine || b.busy || blocked.length || missing.length || !rows.length);
+  }
+  $("#turnBtn").addEventListener("click", () => openTurn());
+  $("#turnClose").addEventListener("click", () => { clearTimeout(turnPoll); $("#turnDialog").close(); });
+  $("#turnRefresh").addEventListener("click", async () => {
+    turnMsg("Читаю таблицы…");
+    try { if (!DEMO) await api.admin("adminRefresh"); await reloadPublic(); turnMsg("Цифры обновлены."); }
+    catch (err) { turnMsg(err.message, true); }
+    loadTurnBoard();
+  });
+  async function setReady(id, ready) {
+    const r = turnBoard && turnBoard.rows.find((x) => x.id === id);
+    if (!r) return;
+    if (DEMO) { r.ready = ready; renderTurnBoard(); return; }
+    try { await api.admin("adminTurnMark", { stateId: id, ready, turn: r.nextTurn }); r.ready = ready; renderTurnBoard(); }
+    catch (err) { turnMsg(err.message, true); loadTurnBoard(); }
+  }
+  $("#turnList").addEventListener("change", (e) => {
+    const c = e.target.closest("[data-tready]");
+    if (c) setReady(c.dataset.tready, c.checked);
+  });
+  $("#turnList").addEventListener("click", async (e) => {
+    const s = e.target.closest("[data-tstats]");
+    if (s) { const r = turnBoard.rows.find((x) => x.id === s.dataset.tstats); openStats(r.id, r.sheetId); return; }
+    const p = e.target.closest("[data-tpreview]");
+    if (p) { openPreview(p.dataset.tpreview); return; }
+    const t = e.target.closest("[data-tretry]");
+    if (t) {
+      try { await api.admin("adminTurnRetry", { jobId: Number(t.dataset.tretry) }); turnMsg("Государство снова в очереди."); }
+      catch (err) { turnMsg(err.message, true); }
+      loadTurnBoard();
+    }
+  });
+
+  // Превью одного государства: Движок считает ход, ничего не применяя.
+  async function openPreview(id) {
+    previewId = id;
+    const r = turnBoard.rows.find((x) => x.id === id);
+    $("#previewTitle").textContent = `Превью: ${r.name}`;
+    $("#previewMsg").textContent = "";
+    $("#orderForm").reset();
+    $("#previewReady").checked = r.ready;
+    $("#previewReady").disabled = r.nextTurn === null || turnBoard.busy;
+    $("#previewBody").innerHTML = `<p class="loading">Движок считает ход…</p>`;
+    if (!$("#previewDialog").open) $("#previewDialog").showModal();
+    try {
+      if (DEMO) throw new Error("В демо-режиме Движок не подключён.");
+      const d = await api.admin("adminEngine", { stateId: id, op: "preview" });
+      const s = d.summary, ch = d.check || { problems: [], ok: [] };
+      $("#previewBody").innerHTML = `
+        <dl class="turn__sum">
+          <dt>Ход</dt><dd>${d.turn} → ${s.newTurn}</dd>
+          <dt>Население</dt><dd>${fmt(s.population)} → ${fmt(s.newPopulation)}</dd>
+          <dt>Казна</dt><dd class="${s.newKazna < 0 ? "balance--deficit" : ""}">${fmt(s.kazna)} → ${fmt(s.newKazna)}</dd>
+          <dt>Склад</dt><dd class="${s.newSklad < 0 ? "balance--deficit" : ""}">${fmt(s.sklad)} → ${fmt(s.newSklad)}</dd>
+          <dt>Стройка</dt><dd>${s.buildings.length ? s.buildings.map(esc).join(", ") : "ничего"}</dd>
+          <dt>Голод / бунт</dt><dd>${esc(s.golod)} / ${esc(s.bunt)}</dd>
+        </dl>
+        ${[...s.warnings, ...ch.problems].map((w) => `<div class="crisis">${esc(w)}</div>`).join("")}
+        <details class="turn__full"><summary>Полный расчёт</summary><pre>${esc(d.text)}</pre></details>`;
+    } catch (err) { $("#previewBody").innerHTML = `<div class="crisis">${esc(err.message)}</div>`; }
+  }
+  $("#previewClose").addEventListener("click", () => $("#previewDialog").close());
+  $("#previewReady").addEventListener("change", (e) => setReady(previewId, e.target.checked));
+  $("#orderForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    if (!f.orderText.value.trim() && !f.verdictText.value.trim()) { $("#previewMsg").textContent = "Впишите приказ или вердикт."; return; }
+    $("#previewMsg").textContent = "Записываю…";
+    try {
+      const d = await api.admin("adminEngine", { stateId: previewId, op: "saveOrder", orderText: f.orderText.value, verdictText: f.verdictText.value });
+      $("#previewMsg").textContent = d.message || "Записано.";
+    } catch (err) { $("#previewMsg").textContent = err.message; }
+  });
+
+  // «Новый ход»: подтверждение двумя галочками, затем очередь на сервере.
+  $("#turnAllBtn").addEventListener("click", () => {
+    const rows = turnBoard.rows;
+    const turns = [...new Set(rows.map((r) => r.nextTurn))];
+    $("#newTurnForm").reset();
+    $("#newTurnGo").disabled = true;
+    $("#newTurnMsg").textContent = "";
+    $("#newTurnText").textContent = `Будет применён ход ${turns.join(", ")} для ${rows.length} ${rows.length === 1 ? "государства" : "государств"}: ${rows.map((r) => r.name).join(", ")}. Перед ходом каждая таблица копируется на ваш Диск (папка «ВПИ — бэкапы перед ходом»). Сам ход отменить нельзя, только вернуть таблицу из копии.`;
+    $("#newTurnDialog").showModal();
+  });
+  $("#newTurnForm").addEventListener("change", (e) => {
+    const f = e.currentTarget;
+    $("#newTurnGo").disabled = !(f.c1.checked && f.c2.checked);
+  });
+  $("#newTurnCancel").addEventListener("click", () => $("#newTurnDialog").close());
+  $("#newTurnForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    if (!(f.c1.checked && f.c2.checked)) return;
+    $("#newTurnGo").disabled = true;
+    try {
+      const turns = Object.fromEntries(turnBoard.rows.map((r) => [r.id, r.nextTurn]));
+      const d = await api.admin("adminTurnAll", { turns });
+      $("#newTurnDialog").close();
+      turnMsg(`Новый ход запущен: ${d.count} в очереди. Сервер берёт их каждую минуту, статус обновляется здесь.`);
+      loadTurnBoard();
+    } catch (err) { $("#newTurnMsg").textContent = err.message; $("#newTurnGo").disabled = false; }
   });
 
   /* ---------------- кисть территорий ---------------- */

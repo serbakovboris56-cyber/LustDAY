@@ -42,7 +42,9 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(refreshSnapshot(env));
+    // ежеминутный cron разбирает очередь «Нового хода», раз в 10 минут — сбор цифр
+    if (event.cron === "* * * * *") ctx.waitUntil(processTurnQueue(env));
+    else ctx.waitUntil(refreshSnapshot(env));
   },
 };
 
@@ -79,6 +81,11 @@ async function handlePost(body, env, ctx, request) {
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
     case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
     case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries);
+    case "adminTurnBoard": await requireAdmin(env, body.token); return adminTurnBoard(env, ctx);
+    case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn);
+    case "adminEngine": await requireAdmin(env, body.token); return adminEngine(env, body.stateId, body.op, body);
+    case "adminTurnAll": await requireAdmin(env, body.token); return adminTurnAll(env, ctx, body.turns);
+    case "adminTurnRetry": await requireAdmin(env, body.token); return adminTurnRetry(env, body.jobId);
     default: throw new HttpError("Неизвестное действие");
   }
 }
@@ -512,15 +519,20 @@ async function adminInfo(env) {
   try { email = saKey(env).client_email; } catch { /* ключ ещё не задан */ }
   const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
   const settings = Object.fromEntries(results.map((r) => [r.key, r.value]));
-  return { ok: true, serviceAccount: email, settings: { season: settings.season || "", start_year: settings.start_year || "1200", template: settings.template || "", admin_email: settings.admin_email || "" } };
+  return { ok: true, serviceAccount: email, settings: { season: settings.season || "", start_year: settings.start_year || "1200", template: settings.template || "", admin_email: settings.admin_email || "",
+    engine_url: settings.engine_url || "" }, engineSecretSet: !!settings._engine_secret };
 }
 
 async function adminSaveSettings(env, st) {
   if (!st || typeof st !== "object") return { ok: false, error: "Нет настроек." };
   const allowed = { season: (v) => String(v).slice(0, 60), start_year: (v) => String(Number(v) || 1200), admin_email: (v) => String(v).trim().slice(0, 120),
-    template: (v) => { const id = sheetIdFromLink(v); if (String(v).trim() && !id) throw new HttpError("Шаблон: это не ссылка на Google-таблицу."); return id; } };
+    template: (v) => { const id = sheetIdFromLink(v); if (String(v).trim() && !id) throw new HttpError("Шаблон: это не ссылка на Google-таблицу."); return id; },
+    engine_url: (v) => { const u = String(v).trim(); if (u && !/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u)) throw new HttpError("Адрес Движка: ссылка вида https://script.google.com/macros/s/…/exec."); return u; } };
   const stmts = [];
-  for (const [k, fn] of Object.entries(allowed)) if (st[k] !== undefined) stmts.push(env.DB.prepare("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value=?2").bind(k, fn(st[k])));
+  const put = (k, v) => env.DB.prepare("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value=?2").bind(k, v);
+  for (const [k, fn] of Object.entries(allowed)) if (st[k] !== undefined) stmts.push(put(k, fn(st[k])));
+  // ключ Движка только записывается: на сайт он не возвращается, пустое поле оставляет прежний
+  if (st.engine_secret !== undefined && String(st.engine_secret).trim()) stmts.push(put("_engine_secret", String(st.engine_secret).trim().slice(0, 200)));
   if (stmts.length) await env.DB.batch(stmts);
   return { ok: true };
 }
@@ -699,4 +711,158 @@ async function adminSaveTerritories(env, grid, geometries) {
   }
   if (stmts.length) await env.DB.batch(stmts);
   return { ok: true };
+}
+
+/* ============================================================
+ * ХОД ЧЕРЕЗ ДВИЖОК
+ * Движок — веб-приложение Apps Script администратора (engine/Движок.gs). Он открывает таблицу по ID и
+ * выполняет Мастер хода. Галочки «данные хода заполнены» и очередь «Новый ход» хранятся в D1;
+ * очередь разбирает минутный cron, по одному государству за вызов Движка.
+ * ============================================================ */
+const JOB_STALE_MS = 10 * 60 * 1000;   // «running» дольше — считаем оборванным и повторяем (Движок не применит ход дважды)
+const JOBS_PER_TICK = 3;               // лимит подзапросов бесплатного тарифа — 50 на вызов
+
+let turnTablesReady = false;
+async function ensureTurnTables(env) {
+  if (turnTablesReady) return;
+  await env.DB.batch([
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS turn_marks (state_id TEXT PRIMARY KEY, turn INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL)"),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS turn_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, batch TEXT NOT NULL, state_id TEXT NOT NULL,
+      expected_turn INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', error TEXT NOT NULL DEFAULT '', backup TEXT NOT NULL DEFAULT '',
+      created TEXT NOT NULL, started TEXT NOT NULL DEFAULT '', finished TEXT NOT NULL DEFAULT '')`),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status)"),
+  ]);
+  turnTablesReady = true;
+}
+
+async function engineConfig(env) {
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings WHERE key IN ('engine_url', '_engine_secret')").all();
+  const o = Object.fromEntries(results.map((r) => [r.key, r.value]));
+  return { url: o.engine_url || "", secret: o._engine_secret || "" };
+}
+
+async function engineCall(env, payload) {
+  const cfg = await engineConfig(env);
+  if (!cfg.url || !cfg.secret) throw new HttpError("Движок не подключён: «Управление» → «Движок хода».");
+  let res;
+  try {
+    // Apps Script отвечает перенаправлением на script.googleusercontent.com — fetch идёт за ним сам
+    res = await fetch(cfg.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ ...payload, secret: cfg.secret }), redirect: "follow" });
+  } catch (e) { throw new HttpError("Движок не отвечает: " + (e && e.message || e)); }
+  const text = await res.text();
+  try { return JSON.parse(text); } catch {
+    throw new HttpError(res.status >= 400 ? `Движок ответил ошибкой ${res.status}.`
+      : "Движок вернул страницу вместо данных. Проверьте, что веб-приложение развёрнуто с доступом «Все» и в «Управлении» его адрес …/exec.");
+  }
+}
+
+// Строки вкладки «Ход»: номер хода из снимка, галочка на следующий ход, проблемы таблицы, итог последнего «Нового хода».
+async function turnRows(env, ctx) {
+  await ensureTurnTables(env);
+  const [regs, snap, marks, last] = await Promise.all([
+    registry(env),
+    getSnapshot(env, ctx).catch(() => ({ states: [] })),
+    env.DB.prepare("SELECT * FROM turn_marks").all().then((r) => r.results),
+    env.DB.prepare("SELECT * FROM turn_jobs WHERE batch = (SELECT batch FROM turn_jobs ORDER BY id DESC LIMIT 1)").all().then((r) => r.results),
+  ]);
+  const maxTurn = snapTurn(snap.states);
+  const rows = regs.filter((r) => r.active).map((r) => {
+    const s = snap.states.find((x) => x.id === r.id) || {};
+    const L_ = s.ledger;
+    const turn = L_ ? L_.turn : null;
+    const mark = marks.find((m) => m.state_id === r.id);
+    const job = last.find((j) => j.state_id === r.id);
+    const problems = [];
+    if (!r.sheet_id) problems.push("нет таблицы");
+    else if (s.error) problems.push("таблица не читается: " + s.error);
+    else if (!L_) problems.push("цифры ещё не собраны");
+    if (L_) {
+      if (turn < maxTurn) problems.push(`отстала: ход ${turn}, у других ${maxTurn}`);
+      if (L_.pools.treasury.stock < 0) problems.push("казна в минусе");
+      if (L_.pools.warehouse.stock < 0) problems.push("склад в минусе");
+    }
+    return {
+      id: r.id, name: r.name || r.id, color: r.color, sheetId: r.sheet_id, turn, nextTurn: turn === null ? null : turn + 1,
+      ready: !!(mark && mark.ready && turn !== null && mark.turn === turn + 1),
+      blocking: problems.some((p) => /нет таблицы|не читается|не собраны/.test(p)),
+      problems, crises: L_ ? L_.crises : [],
+      job: job ? { id: job.id, status: job.status, error: job.error, backup: job.backup, turn: job.expected_turn } : null,
+    };
+  });
+  return { rows, busy: last.some((j) => j.status === "pending" || j.status === "running"), batch: last.length ? last[0].batch : "" };
+}
+
+async function adminTurnBoard(env, ctx) {
+  const cfg = await engineConfig(env);
+  return { ok: true, engine: !!(cfg.url && cfg.secret), ...(await turnRows(env, ctx)) };
+}
+
+async function adminTurnMark(env, stateId, ready, turn) {
+  await ensureTurnTables(env);
+  turn = Number(turn);
+  if (!stateId || !turn) return { ok: false, error: "Не указано государство или ход." };
+  await env.DB.prepare("INSERT INTO turn_marks (state_id, turn, ready, updated) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(state_id) DO UPDATE SET turn=?2, ready=?3, updated=?4")
+    .bind(String(stateId), turn, ready ? 1 : 0, new Date().toISOString()).run();
+  return { ok: true };
+}
+
+// Превью, запись приказа и проверка Движка — сразу, без очереди.
+async function adminEngine(env, stateId, op, extra = {}) {
+  if (op === "ping") return { ...(await engineCall(env, { action: "ping" })) };
+  if (!["preview", "saveOrder", "status"].includes(op)) return { ok: false, error: "Неизвестная команда." };
+  const r = await stateRow(env, stateId);
+  const payload = { action: op, sheetId: r.sheet_id };
+  if (op === "saveOrder") Object.assign(payload, { orderText: String(extra.orderText || "").slice(0, 2000), verdictText: String(extra.verdictText || "").slice(0, 2000) });
+  return engineCall(env, payload);
+}
+
+// «Новый ход»: только когда у всех действующих государств стоит галочка и таблицы читаются.
+async function adminTurnAll(env, ctx, turnsSeen) {
+  const cfg = await engineConfig(env);
+  if (!cfg.url || !cfg.secret) return { ok: false, error: "Движок не подключён: «Управление» → «Движок хода»." };
+  const { rows, busy } = await turnRows(env, ctx);
+  if (busy) return { ok: false, error: "Предыдущий «Новый ход» ещё идёт." };
+  if (!rows.length) return { ok: false, error: "Нет действующих государств." };
+  const blocked = rows.filter((r) => r.blocking);
+  if (blocked.length) return { ok: false, error: "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ") };
+  const notReady = rows.filter((r) => !r.ready);
+  if (notReady.length) return { ok: false, error: "Нет галочки у: " + notReady.map((r) => r.name).join(", ") };
+  // экран админа мог устареть: ход запускаем только для тех номеров ходов, которые он видел
+  if (turnsSeen && rows.some((r) => turnsSeen[r.id] !== undefined && Number(turnsSeen[r.id]) !== r.nextTurn)) return { ok: false, error: "Цифры изменились, пока окно было открыто. Обновите вкладку и проверьте ещё раз." };
+  const batch = new Date().toISOString();
+  await env.DB.batch(rows.map((r) => env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created) VALUES (?1, ?2, ?3, 'pending', ?1)").bind(batch, r.id, r.nextTurn)));
+  return { ok: true, batch, count: rows.length };
+}
+
+async function adminTurnRetry(env, jobId) {
+  await ensureTurnTables(env);
+  const r = await env.DB.prepare("UPDATE turn_jobs SET status='pending', error='', started='', finished='' WHERE id = ? AND status = 'error'").bind(Number(jobId)).run();
+  return r.meta.changes ? { ok: true } : { ok: false, error: "Это задание нельзя повторить." };
+}
+
+async function processTurnQueue(env) {
+  await ensureTurnTables(env);
+  await env.DB.prepare("UPDATE turn_jobs SET status='pending' WHERE status='running' AND started < ?").bind(new Date(Date.now() - JOB_STALE_MS).toISOString()).run();
+  for (let i = 0; i < JOBS_PER_TICK; i++) {
+    // забираем задание атомарно: соседний тик cron его уже не возьмёт
+    const job = await env.DB.prepare(`UPDATE turn_jobs SET status='running', started=?1
+        WHERE id = (SELECT id FROM turn_jobs WHERE status='pending' ORDER BY id LIMIT 1) AND status='pending' RETURNING *`)
+      .bind(new Date().toISOString()).first();
+    if (!job) return;
+    await runTurnJob(env, job);
+  }
+}
+
+async function runTurnJob(env, job) {
+  let status = "done", error = "", backup = "";
+  try {
+    const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
+    if (!r || !r.sheet_id) throw new Error("у государства нет таблицы");
+    const d = await engineCall(env, { action: "apply", sheetId: r.sheet_id, expectedTurn: job.expected_turn });
+    if (d.ok) backup = d.backupUrl || "";
+    else if (d.code === "already" && Number(d.turn) === job.expected_turn) error = "ход уже был применён раньше";
+    else { status = "error"; error = d.error || "ошибка Движка"; }
+  } catch (e) { status = "error"; error = String(e && e.message || e); }
+  await env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, backup=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), backup, new Date().toISOString(), job.id).run();
+  if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
 }
