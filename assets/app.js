@@ -27,6 +27,7 @@
     byId: new Map(),
     layers: new Map(),     // id -> слой границы
     ledgers: new Map(),    // id -> статистика, полученная после входа
+    priv: new Map(),       // id -> { crises, misses, frozen, freezeAfter }: только своё государство, у админа — все
     demoLedgers: new Map(),
     selected: null,
     session: loadSession(),
@@ -41,10 +42,13 @@
     return null;
   }
   function saveSession(s) {
+    const who = (x) => (x ? x.role + ":" + (x.stateId || "") : "");
+    const changed = who(s) !== who(state.session);
     state.session = s;
     state.ledgers.clear();
     try { s ? localStorage.setItem("vpi.session", JSON.stringify(s)) : localStorage.removeItem("vpi.session"); } catch { /* приватный режим */ }
     renderBar();
+    if (changed) loadPrivate();
   }
 
   /* ---------------- data access ---------------- */
@@ -88,6 +92,13 @@
       if (DEMO) return state.demoLedgers.get(stateId);
       const res = await post({ action: "ledger", token: state.session.token, stateId });
       return res.ledger;
+    },
+    // кризисы и пропуски приказов: сервер отдаёт их только правителю (своё государство) и админу (все)
+    async private() {
+      if (!DEMO) return (await post({ action: "private", token: state.session.token })).states;
+      const ses = state.session;
+      return [...state.demoLedgers].filter(([id]) => ses.role === "admin" || id === ses.stateId)
+        .map(([id, led]) => ({ id, crises: (led && led.crises) || [], misses: 0, frozen: false, freezeAfter: 3 }));
     },
     async admin(action, extra = {}) {
       if (DEMO) throw new Error("В демо-режиме изменения не сохраняются: сервер ещё не подключён.");
@@ -200,10 +211,33 @@
   /* ---------------- roster ---------------- */
   function renderRoster() {
     const list = $("#rosterList");
-    list.innerHTML = state.data.states.map((s) => `
-      <li><button type="button" data-id="${esc(s.id)}">
-        <span class="swatch" style="background:${esc(s.color)}"></span>${esc(s.name)}
-      </button></li>`).join("") || `<li class="roster__empty">Государств пока нет</li>`;
+    list.innerHTML = state.data.states.map((s) => {
+      const pv = state.priv.get(s.id), cr = pv ? pv.crises : [];
+      return `
+      <li><button type="button" data-id="${esc(s.id)}" class="${s.frozen != null ? "is-frozen" : ""}">
+        <span class="swatch" style="background:${esc(s.color)}"></span><span class="roster__name">${esc(s.name)}</span>
+        ${s.frozen != null ? `<span class="roster__flag" title="Заморожено с хода ${esc(s.frozen)}">заморожено</span>` : ""}
+        ${cr.length ? `<span class="roster__flag roster__flag--crisis" title="Кризисы: ${esc(cr.join(", "))}">кризис${cr.length > 1 ? " ×" + cr.length : ""}</span>` : ""}
+      </button></li>`; }).join("") || `<li class="roster__empty">Государств пока нет</li>`;
+    if (state.selected) document.querySelectorAll("#rosterList button").forEach((b) => b.setAttribute("aria-current", String(b.dataset.id === state.selected)));
+  }
+
+  // Кризисы и пропуски приказов видят только правитель этого государства и администрация.
+  let privSeq = 0;
+  async function loadPrivate() {
+    const seq = ++privSeq;
+    const before = state.selected && JSON.stringify(state.priv.get(state.selected) || null);
+    let next = new Map();
+    if (state.session) {
+      try { next = new Map((await api.private()).map((x) => [x.id, x])); } catch (err) { console.error(err); }
+      if (seq !== privSeq) return;
+    }
+    state.priv = next;
+    if (!state.data) return;
+    renderRoster();
+    // панель перерисовываем, только если у выбранного государства что-то поменялось
+    const sel = state.selected && state.byId.get(state.selected);
+    if (sel && JSON.stringify(state.priv.get(sel.id) || null) !== before) renderPanel(sel, { keepScroll: true });
   }
   $("#rosterList").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-id]");
@@ -252,8 +286,9 @@
 
   const canSeeLedger = (s) => !!state.session && (state.session.role === "admin" || state.session.stateId === s.id);
 
-  function renderPanel(s) {
+  function renderPanel(s, { keepScroll } = {}) {
     const p = s.public || {};
+    const pv = canSeeLedger(s) ? state.priv.get(s.id) : null;
     let html = `
       <header class="herald" style="--state:${esc(s.color)}">
         <div class="pennant" aria-hidden="true">${esc(s.name.charAt(0))}</div>
@@ -269,13 +304,15 @@
         <dt>Войско в строю</dt><dd>${p.army != null ? fmt(p.army) : "—"}</dd>
         ${s.pantheon ? `<dt>Пантеон</dt><dd>${esc(s.pantheon)}</dd>` : ""}
       </dl>
+      ${s.frozen != null ? `<div class="frozen">Государство заморожено с хода ${esc(s.frozen)}: несколько ходов подряд без приказов. Ходы для него не идут, пока администрация не разморозит; после разморозки номер хода догонит остальных, но без прироста за пропущенное.</div>` : ""}
+      ${pv && !pv.frozen && pv.misses > 0 ? `<div class="crisis">Ходов без приказа подряд: ${pv.misses} из ${pv.freezeAfter}. ${pv.misses + 1 >= pv.freezeAfter ? "Если и к следующему ходу не будет приказа, государство заморозят." : "После " + pv.freezeAfter + "-го государство заморозят."}<div class="crisis__note">Это видят только правитель и администрация.</div></div>` : ""}
       <div id="ledgerSlot"></div>`;
 
     const body = $("#panelBody");
     body.innerHTML = html;
     body.style.setProperty("--state", s.color);
     $("#panel").hidden = false;
-    $("#panel").scrollTop = 0;
+    if (!keepScroll) $("#panel").scrollTop = 0;
     $(".stage").classList.add("has-panel");
 
     const slot = $("#ledgerSlot");
@@ -317,7 +354,7 @@
 
     return `
       <p class="ledger__when">Ход ${L_.turn}, ${L_.year} год</p>
-      ${(L_.crises || []).map((x) => `<div class="crisis">Кризис: ${esc(x)}</div>`).join("")}
+      ${(L_.crises || []).length ? `<div class="crisis">${L_.crises.map((x) => `<div>Кризис: ${esc(x)}</div>`).join("")}<div class="crisis__note">Кризисы видят только правитель и администрация.</div></div>` : ""}
 
       <section class="section">
         <h3>Казна, склад и фонд</h3>
@@ -599,6 +636,7 @@
       applyPublic(res);
       addBorders();            // подписи на карте — с новыми названиями
       state.ledgers.clear();
+      loadPrivate();
       adminMsg("Данные обновлены.");
       openAdmin(true);
     } catch (err) { adminMsg(err.message, true); }
@@ -697,6 +735,7 @@
     const data = await api.publicData();
     applyPublic(data);
     addBorders();
+    loadPrivate();
   }
 
   /* ---------------- правка статистики ---------------- */
@@ -811,7 +850,9 @@
   // Галочки и «Новый ход» живут на сервере (D1), ход применяет Движок — веб-приложение Apps Script администратора.
   let turnBoard = null, turnPoll = null, previewId = null;
   const JOB_TEXT = { pending: "в очереди", running: "применяется…", done: "применён", error: "ошибка", undone: "откачен" };
+  const FREEZE_AFTER = 3;   // ходов подряд без приказа до заморозки; то же число на сервере
   const UNDO_TEXT = { pending: "откат в очереди", running: "откатывается…", done: "ход откачен", error: "ошибка отката" };
+  const CATCHUP_TEXT = { pending: "догон хода в очереди", running: "догоняет ход…", done: "ход догнан без прироста", error: "ошибка догона" };
   function turnMsg(text, isError) {
     const m = $("#turnMsg");
     m.textContent = text || "";
@@ -820,7 +861,8 @@
   function demoBoard() {
     const rows = ((state.data && state.data.states) || []).map((s, i) => ({
       id: s.id, name: s.name, color: s.color, sheetId: "", turn: state.data.turn, nextTurn: state.data.turn + 1,
-      ready: i % 2 === 0, blocking: false, problems: i === 1 ? ["казна в минусе"] : [], crises: [], job: null,
+      ready: i % 2 === 0, orders: i % 2 === 0, misses: i === 1 ? 2 : 0, frozen: false, frozenTurn: null, willFreeze: i === 1,
+      blocking: false, problems: i === 1 ? ["казна в минусе"] : [], crises: [], job: null,
     }));
     return { ok: true, engine: false, rows, busy: false, demo: true };
   }
@@ -840,45 +882,68 @@
     // пока идёт «Новый ход», обновляем статусы сами
     if (turnBoard && turnBoard.busy && $("#turnDialog").open) turnPoll = setTimeout(loadTurnBoard, 15000);
   }
+  // Кого «Новый ход» применит, а кого заморозит (FREEZE_AFTER ходов подряд без приказа) — как на сервере.
+  function turnPlan(rows) {
+    const live = rows.filter((r) => !r.frozen);
+    const toFreeze = live.filter((r) => r.willFreeze && r.nextTurn !== null);
+    return { live, toFreeze, toApply: live.filter((r) => !toFreeze.includes(r)) };
+  }
   function renderTurnBoard() {
     const b = turnBoard, rows = b.rows;
-    const turns = [...new Set(rows.map((r) => r.nextTurn).filter((t) => t !== null))];
+    const plan = turnPlan(rows);
+    const turns = [...new Set(plan.live.map((r) => r.nextTurn).filter((t) => t !== null))];
     $("#turnTitle").textContent = turns.length === 1 ? `Ход ${turns[0]}` : "Ход";
+    const lock = b.busy ? "disabled" : "";
     $("#turnList").innerHTML = rows.length ? `
       <table class="admin-table turn-table">
-        <thead><tr><th>Государство</th><th>Ход</th><th>Проверка</th><th>Готово</th></tr></thead>
+        <thead><tr><th>Государство</th><th>Ход</th><th>Проверка</th><th>Приказ</th><th>Готово</th></tr></thead>
         <tbody>${rows.map((r) => {
           // итог последнего «Нового хода» (или отката) показываем, пока он идёт, при ошибке и сразу после
           const undo = r.job && r.job.kind === "restore";
-          const job = r.job && (b.busy || r.job.status === "error" || r.job.turn === (undo ? r.turn + 1 : r.turn)) ? r.job : null;
+          const job = r.job && r.job.kind !== "freeze" && (b.busy || r.job.status === "error" || r.job.turn === (undo ? r.turn + 1 : r.turn)) ? r.job : null;
+          const backupLabel = r.job && r.job.kind === "catchup" ? "копия до догона" : "копия до хода";
+          const links = `<div class="admin__links">${r.sheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}
+                <button type="button" class="linklike" data-tstats="${esc(r.id)}">Цифры</button>
+                ${r.frozen ? "" : `<button type="button" class="linklike" data-tpreview="${esc(r.id)}">Превью</button>`}</div>`;
+          if (r.frozen) return `
+          <tr class="turn__frozen">
+            <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}${links}</td>
+            <td>${r.turn === null ? "—" : r.turn}<div class="turn__job">заморожено${r.frozenTurn != null ? ` с хода ${r.frozenTurn}` : ""}</div></td>
+            <td class="muted">ходы не идут
+              ${r.crises.length ? `<div class="muted">Кризисы: ${r.crises.map(esc).join(", ")}</div>` : ""}</td>
+            <td colspan="2"><button type="button" class="btn btn--ghost" data-tfreeze="${esc(r.id)}" data-frozen="0" ${lock}>Разморозить</button></td>
+          </tr>`;
           return `
           <tr>
-            <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}
-              <div class="admin__links">${r.sheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}
-                <button type="button" class="linklike" data-tstats="${esc(r.id)}">Цифры</button>
-                <button type="button" class="linklike" data-tpreview="${esc(r.id)}">Превью</button></div></td>
+            <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}${links}</td>
             <td>${r.turn === null ? "—" : `${r.turn} → ${r.nextTurn}`}
-              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc((undo ? UNDO_TEXT : JOB_TEXT)[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
-                ${job.backup && !undo ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}
+              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc((undo ? UNDO_TEXT : job.kind === "catchup" ? CATCHUP_TEXT : JOB_TEXT)[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
+                ${job.backup && !undo ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">${backupLabel}</a>` : ""}
                 ${job.safety ? ` <a href="${esc(job.safety)}" target="_blank" rel="noopener">копия до отката</a>` : ""}
                 ${job.status === "error" ? ` <button type="button" class="linklike" data-tretry="${job.id}">Повторить</button>` : ""}</div>` : ""}</td>
             <td class="${r.problems.length ? "balance--deficit" : "balance--surplus"}">${r.problems.length ? r.problems.map(esc).join("<br>") : "в порядке"}
               ${r.crises.length ? `<div class="muted">Кризисы: ${r.crises.map(esc).join(", ")}</div>` : ""}</td>
-            <td><label class="confirm__check"><input type="checkbox" data-tready="${esc(r.id)}" ${r.ready ? "checked" : ""} ${r.nextTurn === null || b.busy ? "disabled" : ""}> заполнено</label></td>
+            <td><label class="confirm__check"><input type="checkbox" data-torder="${esc(r.id)}" ${r.orders ? "checked" : ""} ${r.nextTurn === null || b.busy ? "disabled" : ""}> есть</label>
+              ${r.misses > 0 && !r.orders ? `<div class="muted">без приказа подряд: ${r.misses}</div>` : ""}
+              ${r.willFreeze ? `<div class="balance--deficit">без приказа — заморозка</div>` : ""}
+              <div class="admin__links"><button type="button" class="linklike linklike--danger" data-tfreeze="${esc(r.id)}" data-frozen="1" ${lock}>Заморозить</button></div></td>
+            <td>${r.willFreeze ? `<span class="muted">не нужно</span>` : `<label class="confirm__check"><input type="checkbox" data-tready="${esc(r.id)}" ${r.ready ? "checked" : ""} ${r.nextTurn === null || b.busy ? "disabled" : ""}> заполнено</label>`}</td>
           </tr>`; }).join("")}
         </tbody>
       </table>` : `<p class="muted">Действующих государств нет.</p>`;
-    const missing = rows.filter((r) => !r.ready);
-    const blocked = rows.filter((r) => r.blocking);
+    const missing = plan.toApply.filter((r) => !r.ready);
+    const blocked = plan.toApply.filter((r) => r.blocking);
+    const freezeNote = plan.toFreeze.length ? ` Будут заморожены (${FREEZE_AFTER} хода без приказа): ${plan.toFreeze.map((r) => r.name).join(", ")}.` : "";
     let hint = "";
     if (b.demo) hint = "Демо-режим: ход не применяется.";
     else if (!b.engine) hint = "Движок не подключён: «Управление» → «Настройки» → адрес и ключ Движка.";
     else if (b.busy) hint = "Идёт ход или откат: государства обрабатываются по очереди, примерно по минуте на каждое. Окно можно закрыть.";
+    else if (!plan.live.length) hint = "Все государства заморожены.";
     else if (blocked.length) hint = "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ");
-    else if (missing.length) hint = `Нет галочки у: ${missing.map((r) => r.name).join(", ")}`;
-    else hint = "Все государства готовы.";
+    else if (missing.length) hint = `Нет галочки «заполнено» у: ${missing.map((r) => r.name).join(", ")}.` + freezeNote;
+    else hint = "Все государства готовы." + freezeNote;
     $("#turnFootHint").textContent = hint;
-    $("#turnAllBtn").disabled = !!(b.demo || !b.engine || b.busy || blocked.length || missing.length || !rows.length);
+    $("#turnAllBtn").disabled = !!(b.demo || !b.engine || b.busy || blocked.length || missing.length || !plan.live.length);
   }
   $("#turnBtn").addEventListener("click", () => openTurn());
   $("#turnClose").addEventListener("click", () => { clearTimeout(turnPoll); $("#turnDialog").close(); });
@@ -888,16 +953,26 @@
     catch (err) { turnMsg(err.message, true); }
     loadTurnBoard();
   });
-  async function setReady(id, ready) {
+  // Обе галочки хода («заполнено» и «приказ есть») сервер хранит вместе, на номер следующего хода.
+  async function setMark(id, patch) {
     const r = turnBoard && turnBoard.rows.find((x) => x.id === id);
     if (!r) return;
-    if (DEMO) { r.ready = ready; renderTurnBoard(); return; }
-    try { await api.admin("adminTurnMark", { stateId: id, ready, turn: r.nextTurn }); r.ready = ready; renderTurnBoard(); }
+    const next = { ready: r.ready, orders: r.orders, ...patch };
+    const apply = () => {
+      Object.assign(r, next);
+      r.willFreeze = !r.frozen && !r.orders && r.misses + 1 >= FREEZE_AFTER;
+      renderTurnBoard();
+      if ($("#previewDialog").open && previewId === id) { $("#previewReady").checked = r.ready; $("#previewOrders").checked = r.orders; }
+    };
+    if (DEMO) { apply(); return; }
+    try { await api.admin("adminTurnMark", { stateId: id, turn: r.nextTurn, ...next }); apply(); }
     catch (err) { turnMsg(err.message, true); loadTurnBoard(); }
   }
   $("#turnList").addEventListener("change", (e) => {
     const c = e.target.closest("[data-tready]");
-    if (c) setReady(c.dataset.tready, c.checked);
+    if (c) setMark(c.dataset.tready, { ready: c.checked });
+    const o = e.target.closest("[data-torder]");
+    if (o) setMark(o.dataset.torder, { orders: o.checked });
   });
   $("#turnList").addEventListener("click", async (e) => {
     const s = e.target.closest("[data-tstats]");
@@ -908,6 +983,23 @@
     if (t) {
       try { await api.admin("adminTurnRetry", { jobId: Number(t.dataset.tretry) }); turnMsg("Государство снова в очереди."); }
       catch (err) { turnMsg(err.message, true); }
+      loadTurnBoard();
+    }
+    const z = e.target.closest("[data-tfreeze]");
+    if (z) {
+      const frozen = z.dataset.frozen === "1", r = turnBoard.rows.find((x) => x.id === z.dataset.tfreeze);
+      if (!armed(z, frozen ? "Точно заморозить?" : "Точно разморозить?")) return;
+      z.disabled = true;
+      try {
+        if (DEMO) throw new Error("В демо-режиме заморозка не сохраняется.");
+        const d = await api.admin("adminFreeze", { stateId: r.id, frozen });
+        const c = d.catchup;
+        turnMsg(frozen ? `«${r.name}» заморожено: «Новый ход» его пропускает.`
+          : `«${r.name}» разморожено, счёт пропусков обнулён.` + (!c ? ""
+            : c.noEngine ? ` Движок не подключён, поэтому ход ${c.from} не догнан до ${c.to}.`
+            : ` Ход догонит остальных (${c.from} → ${c.to}) без прироста за пропущенные ходы: задание в очереди, сервер берёт его в течение минуты.`), !!(c && c.noEngine));
+        await reloadPublic();
+      } catch (err) { turnMsg(err.message, true); }
       loadTurnBoard();
     }
   });
@@ -921,6 +1013,8 @@
     $("#orderForm").reset();
     $("#previewReady").checked = r.ready;
     $("#previewReady").disabled = r.nextTurn === null || turnBoard.busy;
+    $("#previewOrders").checked = r.orders;
+    $("#previewOrders").disabled = r.nextTurn === null || turnBoard.busy;
     $("#previewBody").innerHTML = `<p class="loading">Движок считает ход…</p>`;
     if (!$("#previewDialog").open) $("#previewDialog").showModal();
     try {
@@ -941,7 +1035,8 @@
     } catch (err) { $("#previewBody").innerHTML = `<div class="crisis">${esc(err.message)}</div>`; }
   }
   $("#previewClose").addEventListener("click", () => $("#previewDialog").close());
-  $("#previewReady").addEventListener("change", (e) => setReady(previewId, e.target.checked));
+  $("#previewReady").addEventListener("change", (e) => setMark(previewId, { ready: e.target.checked }));
+  $("#previewOrders").addEventListener("change", (e) => setMark(previewId, { orders: e.target.checked }));
   $("#orderForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -949,18 +1044,23 @@
     $("#previewMsg").textContent = "Записываю…";
     try {
       const d = await api.admin("adminEngine", { stateId: previewId, op: "saveOrder", orderText: f.orderText.value, verdictText: f.verdictText.value });
-      $("#previewMsg").textContent = d.message || "Записано.";
+      $("#previewMsg").textContent = (d.message || "Записано.") + (d.orders ? " Отмечено: приказ есть." : "");
+      if (d.orders) loadTurnBoard();
     } catch (err) { $("#previewMsg").textContent = err.message; }
   });
 
   // «Новый ход»: подтверждение двумя галочками, затем очередь на сервере.
   $("#turnAllBtn").addEventListener("click", () => {
-    const rows = turnBoard.rows;
+    const { toApply: rows, toFreeze } = turnPlan(turnBoard.rows);
     const turns = [...new Set(rows.map((r) => r.nextTurn))];
+    const noOrder = rows.filter((r) => !r.orders);
     $("#newTurnForm").reset();
     $("#newTurnGo").disabled = true;
     $("#newTurnMsg").textContent = "";
-    $("#newTurnText").textContent = `Будет применён ход ${turns.join(", ")} для ${rows.length} ${rows.length === 1 ? "государства" : "государств"}: ${rows.map((r) => r.name).join(", ")}. Перед ходом каждая таблица копируется на ваш Диск (папка «ВПИ — бэкапы перед ходом»). Если что-то пойдёт не так, ход можно откатить: «История» → «Ходы».`;
+    $("#newTurnText").textContent = (rows.length ? `Будет применён ход ${turns.join(", ")} для ${rows.length} ${rows.length === 1 ? "государства" : "государств"}: ${rows.map((r) => r.name).join(", ")}.` : "Ход не применяется ни одному государству.")
+      + (noOrder.length ? ` Без приказа (пропуск засчитается): ${noOrder.map((r) => r.name).join(", ")}.` : "")
+      + (toFreeze.length ? ` Будут заморожены — ${FREEZE_AFTER} хода подряд без приказа: ${toFreeze.map((r) => r.name).join(", ")}.` : "")
+      + " Перед ходом каждая таблица копируется на ваш Диск (папка «ВПИ — бэкапы перед ходом»). Если что-то пойдёт не так, ход можно откатить: «История» → «Ходы».";
     $("#newTurnDialog").showModal();
   });
   $("#newTurnForm").addEventListener("change", (e) => {
@@ -974,10 +1074,12 @@
     if (!(f.c1.checked && f.c2.checked)) return;
     $("#newTurnGo").disabled = true;
     try {
-      const turns = Object.fromEntries(turnBoard.rows.map((r) => [r.id, r.nextTurn]));
-      const d = await api.admin("adminTurnAll", { turns });
+      const plan = turnPlan(turnBoard.rows);
+      const turns = Object.fromEntries(plan.live.map((r) => [r.id, r.nextTurn]));
+      const d = await api.admin("adminTurnAll", { turns, freeze: plan.toFreeze.map((r) => r.id) });
       $("#newTurnDialog").close();
-      turnMsg(`Новый ход запущен: ${d.count} в очереди. Сервер берёт их каждую минуту, статус обновляется здесь.`);
+      turnMsg(`Новый ход запущен: ${d.count} в очереди. Сервер берёт их каждую минуту, статус обновляется здесь.` + (d.frozen && d.frozen.length ? ` Заморожены: ${d.frozen.join(", ")}.` : ""));
+      if (d.frozen && d.frozen.length) reloadPublic().catch(() => null);
       loadTurnBoard();
     } catch (err) { $("#newTurnMsg").textContent = err.message; $("#newTurnGo").disabled = false; }
   });
@@ -1208,6 +1310,7 @@
     const geoReady = api.borders().catch((err) => { console.error("Границы не загрузились", err); return null; });
     try {
       applyPublic(await api.publicData());
+      loadPrivate();
     } catch (err) {
       state.data = { turn: 0, season: "", states: [] };
       $("#turnInfo").textContent = "Не удалось загрузить данные государств. Обновите страницу позже.";

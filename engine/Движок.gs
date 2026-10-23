@@ -4,12 +4,13 @@
  * что и Мастер хода внутри таблицы (Код.gs v15.1 лежит в этом же проекте).
  *
  * Запрос (POST, тело — JSON): { secret, action, sheetId, expectedTurn?, orderText?, verdictText?, costs? }
- *   action: ping | status | preview | saveOrder | apply | restore
+ *   action: ping | status | preview | saveOrder | apply | restore | skip
  *   restore: { turn, backupId } — вернуть таблицу к копии «перед ходом turn» (откат последнего хода)
+ *   skip: { toTurn } — размороженное государство догоняет остальных: пустые ходы до toTurn без прироста
  * Ответ: { ok: true, ... } или { ok: false, error, code? }.
  */
 
-const ENGINE_VERSION = "1.1";
+const ENGINE_VERSION = "1.2";
 const BACKUP_FOLDER = "ВПИ — бэкапы перед ходом";
 
 function doPost(e) {
@@ -27,6 +28,7 @@ function doPost(e) {
       case "saveOrder": return reply_(engineSaveOrder_(req));
       case "apply": return reply_(engineApply_(req));
       case "restore": return reply_(engineRestore_(req));
+      case "skip": return reply_(engineSkip_(req));
       default: return reply_({ ok: false, error: "Неизвестная команда: " + req.action });
     }
   } catch (err) {
@@ -76,6 +78,37 @@ function engineApply_(req) {
     const backup = backupState_("перед ходом " + expected);
     const res = wizardApplyTurn();
     return { ok: true, turn: res.turn, result: res, backupUrl: backup.url, backupId: backup.id };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Пропуск ходов после заморозки: номер хода догоняет остальных, но ничего не начисляется и не тратится.
+// На каждый пропущенный ход — строка Журнала с нулевыми приходами и расходами (остатки переносятся формулами),
+// население то же, стройки, модификаторы, лояльность и клирика не меняются. Перед этим — копия таблицы.
+function engineSkip_(req) {
+  const to = Number(req.toTurn);
+  if (!to) return { ok: false, error: "Не указан номер хода." };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { ok: false, code: "busy", error: "Движок занят другим ходом, попробуйте через минуту." };
+  try {
+    const current = getCurrentTurn();
+    if (current >= to) return { ok: false, code: "already", turn: current, error: "В таблице уже ход " + current + "." };
+    const backup = backupState_("перед пропуском ходов " + (current + 1) + "–" + to);
+    const journal = ENGINE_SS_.getSheetByName("Журнал");
+    const pop = journal.getRange(findLastFilledRow(journal, 2), 2).getValue();
+    for (let t = current + 1; t <= to; t++) {
+      const last = findLastFilledRow(journal, 2), row = last + 1;
+      writeJournalFormulas(journal, row, last);
+      styleJournalRows(journal, row, 1);
+      journal.getRange(row, 1, 1, 2).setValues([[t, pop]]);
+      journal.getRange(row, 5, 1, 4).setValues([[0, 0, 0, 0]]);
+      journal.getRange(row, 11, 1, 4).setValues([["", "Государство заморожено: ход пропущен, без прироста", 0, 0]]);
+      journal.getRange(row, 16, 1, 2).setValues([[0, 0]]);
+      try { writeChronicle(1200 + t, t, "Ход " + t, "Государство было заморожено: ход пропущен без прироста."); } catch (e) {}
+    }
+    SpreadsheetApp.flush();
+    return { ok: true, turn: getCurrentTurn(), backupUrl: backup.url };
   } finally {
     lock.releaseLock();
   }
