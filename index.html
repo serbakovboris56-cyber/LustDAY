@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261023-5">
+<link rel="stylesheet" href="assets/app.css?v=20261023-6">
 </head>
 <body>
 <header class="bar">
@@ -44,6 +44,7 @@
       <button type="button" class="btn btn--ghost" data-mode="brush" aria-pressed="true">Кисть</button>
       <button type="button" class="btn btn--ghost" data-mode="erase" aria-pressed="false">Ластик</button>
       <button type="button" class="btn btn--ghost" data-mode="prov" aria-pressed="false">Провинции</button>
+      <button type="button" class="btn btn--ghost" data-mode="city" aria-pressed="false">Города</button>
       <button type="button" class="btn btn--ghost" data-mode="pan" aria-pressed="false">Рука</button>
     </div>
     <label class="brush__field" id="brushProvField" hidden>Провинция <select id="brushProv"></select></label>
@@ -241,10 +242,11 @@
   </form>
 </dialog>
 
-<script src="assets/config.js?v=20261023-5"></script>
+<script src="assets/config.js?v=20261023-6"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
-<script src="assets/vector-map.js?v=20261023-5"></script>
-<script src="assets/territory-editor.js?v=20261023-5"></script>
-<script src="assets/app.js?v=20261023-5"></script>
+<script src="assets/settlements.js?v=20261023-6"></script>
+<script src="assets/vector-map.js?v=20261023-6"></script>
+<script src="assets/territory-editor.js?v=20261023-6"></script>
+<script src="assets/app.js?v=20261023-6"></script>
 </body>
 </html>

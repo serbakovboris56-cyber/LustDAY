@@ -147,7 +147,7 @@
     function tileView(coords, size) {
       const k = Math.pow(2, coords.z - nativeZ);                 // экранных пикселей на пиксель карты
       const ox = (coords.x * size.x) / k, oy = (coords.y * size.y) / k;
-      const pad = 120 / k;
+      const pad = 180 / k;   // с запасом под значки городов, выступающие за край плитки
       return { k, ox, oy, view: [ox - pad, oy - pad, ox + size.x / k + pad, oy + size.y / k + pad] };
     }
     function paintTile(tile, coords) {
@@ -212,6 +212,9 @@
         ctx.globalAlpha = t.selected ? 0.45 : 0.32; ctx.fillStyle = t.color; ctx.fill(p, "evenodd");
       }
       ctx.globalAlpha = 1;
+      const S = window.VPISettlements, towns = S ? territories.filter((t) => t.settle).map((t) => t.settle) : [];
+      // дороги между городами и деревнями — под горами (идут между вершинами) и под реками
+      if (towns.length) S.drawRoads(ctx, k, view, towns);
       // горы: не рисуем, пока значок меньше 3 экранных пикселей
       for (const m of D.mountains) if (m.s * k >= 3 && hit(m.b, view)) drawMountain(ctx, m, k);
       // реки
@@ -243,6 +246,8 @@
       ctx.strokeStyle = STYLE.coast; ctx.lineWidth = 1.1 / k;
       for (const c of D.coastChunks) if (hit(c.b, view)) ctx.stroke(c.p);
       for (const l of D.lakeLines) if (hit(l.b, view)) ctx.stroke(l.p);
+      // города, деревни и постройки — поверх всего, без обрезки по берегу
+      if (towns.length) S.drawIcons(ctx, k, view, towns);
     }
 
     const layer = new Layer({ tileSize: 256, noWrap: true, minZoom: 0, maxZoom: nativeZ + 1, keepBuffer: 3, updateWhenZooming: false });
@@ -264,7 +269,8 @@
 
     return {
       layer,
-      // features: GeoJSON Feature[] с properties.id; info(id) -> {color, selected}.
+      // features: GeoJSON Feature[] с properties.id; info(id) -> {color, selected, regions}.
+      // regions — публичные цифры провинций [{name, type, population, buildings}] для городов и построек.
       // Если границы те же, а сменились только цвет или выбор, перерисовываются лишь плитки этих государств.
       setTerritories(features, info) {
         const old = new Map(territories.map((t) => [t.feature, t]));
@@ -273,18 +279,25 @@
         const next = features.map((f) => {
           const g = prepareFeature(f);
           const i = info(f.properties.id) || {};
-          return { feature: f, id: f.properties.id, color: i.color || "#FFD700", selected: !!i.selected, ...g };
+          const color = i.color || "#FFD700", regKey = JSON.stringify(i.regions || null);
+          const o = old.get(f), pv = f.properties.provinces;
+          const settle = o && o.regKey === regKey && o.color === color ? o.settle
+            : window.VPISettlements && pv && pv.towns ? window.VPISettlements.prepare(pv, i.regions, color) : null;
+          return { feature: f, id: f.properties.id, color, selected: !!i.selected, regKey, settle, ...g };
         }).filter((t) => t.rings.length);
         if (!sameShapes) { territories = next; repaint(null); return; }
         const changed = [];
         for (const t of next) {
           const o = old.get(t.feature);
           if (!o || o.color !== t.color || o.selected !== t.selected) changed.push(t.box);
+          else if (o.regKey !== t.regKey) changed.push(t.settle ? t.settle.box : t.box);
         }
         territories = next;
         if (changed.length) repaint(changed);
       },
       redraw() { repaint(null); },
+      // город под точкой карты (x, y в пикселях исходной карты) при масштабе k — для подсказки
+      townAt(x, y, k) { return window.VPISettlements ? window.VPISettlements.townAt(territories.filter((t) => t.settle).map((t) => t.settle), x, y, k) : null; },
     };
   }
 

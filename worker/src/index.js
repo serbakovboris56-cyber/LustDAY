@@ -354,7 +354,9 @@ function parseLedger(vr, startYear) {
   };
   return {
     sheetName: String(cell(nameRows[0], 0) || ""),
-    public: { population: ledger.population, regions: regions.length, army: ledger.levy.inRanks },
+    // население и постройки провинций публичны: по ним на карте рисуются города, деревни и постройки
+    public: { population: ledger.population, regions: regions.length, army: ledger.levy.inRanks,
+      provinces: regions.map(({ name, type, population, buildings }) => ({ name, type, population, buildings })) },
     ledger,
   };
 }
@@ -945,15 +947,37 @@ async function ensureProvinceTable(env) {
   provinceTableReady = true;
 }
 
-// Оставляет от присланного только линии из чисел и подписи {name, x, y}.
+// Оставляет от присланного только линии из чисел, подписи {name, x, y} и поселения (см. assets/settlements.js).
 function cleanProvinces(p) {
-  if (!p || typeof p !== "object" || !Array.isArray(p.lines)) return null;
+  if (!p || typeof p !== "object") return null;
   const num = (v) => Number.isFinite(v);
-  const lines = p.lines.filter((l) => Array.isArray(l) && l.length >= 2 && l.every((pt) => Array.isArray(pt) && pt.length === 2 && num(pt[0]) && num(pt[1])));
-  if (!lines.length) return null;
+  const isPt = (pt) => Array.isArray(pt) && pt.length === 2 && num(pt[0]) && num(pt[1]);
+  const pts = (a, max) => (Array.isArray(a) ? a.filter(isPt).slice(0, max).map(([x, y]) => [Math.round(x), Math.round(y)]) : []);
+  const lineList = (a, max, maxPts) => (Array.isArray(a) ? a.slice(0, max).map((l) => (Array.isArray(l) && l.every(isPt) ? l.slice(0, maxPts) : [])) : []);
+  const lines = lineList(p.lines, 5000, 100000).filter((l) => l.length >= 2);
   const labels = (Array.isArray(p.labels) ? p.labels : []).filter((x) => x && num(x.x) && num(x.y))
     .map((x) => ({ name: String(x.name || "").slice(0, 60), x: x.x, y: x.y }));
-  return { lines, labels };
+  const towns = (Array.isArray(p.towns) ? p.towns : []).filter((t) => t && num(t.x) && num(t.y)).slice(0, 255).map((t) => ({
+    name: String(t.name || "").slice(0, 60), i: Number.isInteger(t.i) ? t.i : 0, x: Math.round(t.x), y: Math.round(t.y), set: !!t.set,
+    villages: pts(t.villages, 12), vroads: lineList(t.vroads, 12, 600), spots: pts(t.spots, 20), fields: pts(t.fields, 30),
+    coast: isPt(t.coast) ? t.coast.map(Math.round) : null,
+  }));
+  const links = lineList(p.links, 1000, 2000).filter((l) => l.length >= 2);
+  if (!lines.length && !towns.length) return null;
+  return towns.length ? { lines, labels, towns, links } : { lines, labels };
+}
+
+// Места городов, выбранные админом: {stateId: {провинция: [x, y]}}
+function cleanCities(c) {
+  if (!c || typeof c !== "object") return undefined;
+  const out = {};
+  for (const [id, m] of Object.entries(c).slice(0, 200)) {
+    if (!m || typeof m !== "object") continue;
+    const o = {};
+    for (const [name, pt] of Object.entries(m).slice(0, 255)) if (Array.isArray(pt) && Number.isFinite(pt[0]) && Number.isFinite(pt[1])) o[String(name).slice(0, 60)] = [Math.round(pt[0]), Math.round(pt[1])];
+    out[String(id).slice(0, 20)] = o;
+  }
+  return out;
 }
 
 /* ---------- версии территорий ----------
@@ -1033,7 +1057,7 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
   const prov = grid.prov && Array.isArray(grid.prov.rle) ? { rle: grid.prov.rle, names: grid.prov.names || {} } : undefined;
   await ensureTerritoryVersions(env);
   if (!(await env.DB.prepare("SELECT id FROM territory_versions LIMIT 1").first())) await saveTerritoryVersion(env, "Как было до истории версий");
-  const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, updated: new Date().toISOString() };
+  const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, cities: cleanCities(grid.cities), updated: new Date().toISOString() };
   const gridText = JSON.stringify(gridNow);
   await env.KV.put("territory_grid", gridText);
   await ensureProvinceTable(env);
