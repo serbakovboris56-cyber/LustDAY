@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261023-2">
+<link rel="stylesheet" href="assets/app.css?v=20261023-3">
 </head>
 <body>
 <header class="bar">
@@ -24,6 +24,7 @@
     <span class="bar__who" id="whoami"></span>
     <button class="btn btn--ghost" id="brushBtn" type="button" hidden>Территории</button>
     <button class="btn btn--ghost" id="turnBtn" type="button" hidden>Ход</button>
+    <button class="btn btn--ghost" id="historyBtn" type="button" hidden>История</button>
     <button class="btn btn--ghost" id="adminBtn" type="button" hidden>Управление</button>
     <button class="btn" id="loginBtn" type="button">Войти</button>
   </div>
@@ -190,6 +191,38 @@
   </form>
 </dialog>
 
+<dialog class="login admin" id="historyDialog">
+  <div class="login__form">
+    <div class="admin__head">
+      <h2>История и откат</h2>
+      <button class="panel__close" id="historyClose" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <div class="hist__tabs" role="tablist">
+      <button type="button" class="btn btn--ghost" role="tab" data-htab="borders" aria-selected="true">Границы</button>
+      <button type="button" class="btn btn--ghost" role="tab" data-htab="stats" aria-selected="false">Цифры</button>
+      <button type="button" class="btn btn--ghost" role="tab" data-htab="turns" aria-selected="false">Ходы</button>
+    </div>
+    <p class="login__hint" id="historyHint"></p>
+    <label class="hist__state" id="historyStateField" hidden>Государство <select id="historyState"></select></label>
+    <p class="login__error" id="historyMsg" role="status"></p>
+    <div id="historyBody"><p class="loading">Загружаю…</p></div>
+  </div>
+</dialog>
+
+<dialog class="login confirm" id="undoTurnDialog">
+  <form class="login__form" id="undoTurnForm">
+    <label class="confirm__check confirm__check--top"><input type="checkbox" name="c1"> Да, откатить</label>
+    <h2>Откатить ход?</h2>
+    <p class="login__hint" id="undoTurnText"></p>
+    <p class="login__error" id="undoTurnMsg" role="alert"></p>
+    <div class="login__actions confirm__actions">
+      <button class="btn btn--ghost" id="undoTurnCancel" type="button">Отмена</button>
+      <button class="btn btn--danger" id="undoTurnGo" type="submit" disabled>Откатить ход</button>
+    </div>
+    <label class="confirm__check confirm__check--bottom"><input type="checkbox" name="c2"> Изменения после хода пропадут</label>
+  </form>
+</dialog>
+
 <dialog class="login admin" id="statsDialog">
   <form class="login__form" id="statsForm">
     <div class="admin__head">
@@ -201,15 +234,16 @@
     <p class="login__error" id="statsMsg" role="status"></p>
     <div class="login__actions">
       <a class="btn btn--ghost" id="statsSheetLink" target="_blank" rel="noopener">Открыть таблицу</a>
+      <button class="btn btn--ghost" type="button" id="statsHistory">История правок</button>
       <button class="btn" type="submit" id="statsSave">Записать в таблицу</button>
     </div>
   </form>
 </dialog>
 
-<script src="assets/config.js?v=20261023-2"></script>
+<script src="assets/config.js?v=20261023-3"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
-<script src="assets/vector-map.js?v=20261023-2"></script>
-<script src="assets/territory-editor.js?v=20261023-2"></script>
-<script src="assets/app.js?v=20261023-2"></script>
+<script src="assets/vector-map.js?v=20261023-3"></script>
+<script src="assets/territory-editor.js?v=20261023-3"></script>
+<script src="assets/app.js?v=20261023-3"></script>
 </body>
 </html>

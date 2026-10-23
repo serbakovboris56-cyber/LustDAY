@@ -54,11 +54,36 @@ CREATE TABLE IF NOT EXISTS turn_jobs (
   batch         TEXT NOT NULL,
   state_id      TEXT NOT NULL,
   expected_turn INTEGER NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | error
+  status        TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | error | undone (ход откачен)
   error         TEXT NOT NULL DEFAULT '',
   backup        TEXT NOT NULL DEFAULT '',          -- ссылка на копию таблицы перед ходом
   created       TEXT NOT NULL,
   started       TEXT NOT NULL DEFAULT '',
-  finished      TEXT NOT NULL DEFAULT ''
+  finished      TEXT NOT NULL DEFAULT '',
+  kind          TEXT NOT NULL DEFAULT 'apply',     -- apply — ход, restore — откат хода из копии backup
+  safety        TEXT NOT NULL DEFAULT ''           -- копия таблицы, снятая перед откатом
 );
 CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status);
+
+-- Версии территорий: после каждого сохранения кисти — снимок сетки, контуров и провинций всех государств (JSON, gzip, base64)
+CREATE TABLE IF NOT EXISTS territory_versions (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  created TEXT NOT NULL,
+  note    TEXT NOT NULL DEFAULT '',
+  states  TEXT NOT NULL DEFAULT '[]',
+  data    TEXT NOT NULL
+);
+
+-- Журнал правок «Цифр» с сайта: блоки ввода до и после записи, для отката
+CREATE TABLE IF NOT EXISTS stat_edits (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  state_id TEXT NOT NULL,
+  created TEXT NOT NULL,
+  turn    INTEGER NOT NULL DEFAULT 0,
+  keys    TEXT NOT NULL,
+  before  TEXT NOT NULL,
+  after   TEXT NOT NULL,
+  undo_of INTEGER NOT NULL DEFAULT 0,   -- эта запись — откат правки с таким id
+  undone  TEXT NOT NULL DEFAULT ''      -- когда правку откатили
+);
+CREATE INDEX IF NOT EXISTS stat_edits_state ON stat_edits (state_id, id);

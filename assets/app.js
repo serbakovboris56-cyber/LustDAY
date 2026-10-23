@@ -63,7 +63,7 @@
     }
     try { res = await r.json(); } catch { throw new Error(`Сервер ответил ошибкой (${r.status}).`); }
     if (res && res.auth) { saveSession(null); }
-    if (!res || !res.ok) throw new Error((res && res.error) || "Сервер не ответил.");
+    if (!res || !res.ok) throw Object.assign(new Error((res && res.error) || "Сервер не ответил."), { res });
     return res;
   }
 
@@ -420,6 +420,7 @@
     $("#loginBtn").classList.toggle("btn--ghost", !!ses);
     $("#adminBtn").hidden = !(ses && ses.role === "admin");
     $("#turnBtn").hidden = !(ses && ses.role === "admin");
+    $("#historyBtn").hidden = !(ses && ses.role === "admin");
     $("#brushBtn").hidden = !(ses && ses.role === "admin");
     $("#whoami").textContent = !ses ? "" : ses.role === "admin" ? "Администратор" : own ? own.name : "";
   }
@@ -773,6 +774,7 @@
     if (e.target.closest("[data-del-region]")) e.target.closest("tr").remove();
   });
   $("#statsClose").addEventListener("click", () => $("#statsDialog").close());
+  $("#statsHistory").addEventListener("click", () => { $("#statsDialog").close(); openHistory("stats", statsState); });
   $("#statsForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target, val = (n) => (f.elements[n] ? f.elements[n].value : "");
@@ -807,7 +809,8 @@
   /* ---------------- вкладка «Ход» ---------------- */
   // Галочки и «Новый ход» живут на сервере (D1), ход применяет Движок — веб-приложение Apps Script администратора.
   let turnBoard = null, turnPoll = null, previewId = null;
-  const JOB_TEXT = { pending: "в очереди", running: "применяется…", done: "применён", error: "ошибка" };
+  const JOB_TEXT = { pending: "в очереди", running: "применяется…", done: "применён", error: "ошибка", undone: "откачен" };
+  const UNDO_TEXT = { pending: "откат в очереди", running: "откатывается…", done: "ход откачен", error: "ошибка отката" };
   function turnMsg(text, isError) {
     const m = $("#turnMsg");
     m.textContent = text || "";
@@ -844,8 +847,9 @@
       <table class="admin-table turn-table">
         <thead><tr><th>Государство</th><th>Ход</th><th>Проверка</th><th>Готово</th></tr></thead>
         <tbody>${rows.map((r) => {
-          // итог последнего «Нового хода» показываем, пока он идёт, при ошибке и сразу после хода
-          const job = r.job && (b.busy || r.job.status === "error" || r.job.turn === r.turn) ? r.job : null;
+          // итог последнего «Нового хода» (или отката) показываем, пока он идёт, при ошибке и сразу после
+          const undo = r.job && r.job.kind === "restore";
+          const job = r.job && (b.busy || r.job.status === "error" || r.job.turn === (undo ? r.turn + 1 : r.turn)) ? r.job : null;
           return `
           <tr>
             <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name)}
@@ -853,8 +857,9 @@
                 <button type="button" class="linklike" data-tstats="${esc(r.id)}">Цифры</button>
                 <button type="button" class="linklike" data-tpreview="${esc(r.id)}">Превью</button></div></td>
             <td>${r.turn === null ? "—" : `${r.turn} → ${r.nextTurn}`}
-              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc(JOB_TEXT[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
-                ${job.backup ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}
+              ${job ? `<div class="turn__job turn__job--${esc(job.status)}">${esc((undo ? UNDO_TEXT : JOB_TEXT)[job.status] || job.status)}${job.error ? ": " + esc(job.error) : ""}
+                ${job.backup && !undo ? ` <a href="${esc(job.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}
+                ${job.safety ? ` <a href="${esc(job.safety)}" target="_blank" rel="noopener">копия до отката</a>` : ""}
                 ${job.status === "error" ? ` <button type="button" class="linklike" data-tretry="${job.id}">Повторить</button>` : ""}</div>` : ""}</td>
             <td class="${r.problems.length ? "balance--deficit" : "balance--surplus"}">${r.problems.length ? r.problems.map(esc).join("<br>") : "в порядке"}
               ${r.crises.length ? `<div class="muted">Кризисы: ${r.crises.map(esc).join(", ")}</div>` : ""}</td>
@@ -867,7 +872,7 @@
     let hint = "";
     if (b.demo) hint = "Демо-режим: ход не применяется.";
     else if (!b.engine) hint = "Движок не подключён: «Управление» → «Настройки» → адрес и ключ Движка.";
-    else if (b.busy) hint = "Новый ход идёт: государства обрабатываются по очереди, примерно по минуте на каждое. Окно можно закрыть.";
+    else if (b.busy) hint = "Идёт ход или откат: государства обрабатываются по очереди, примерно по минуте на каждое. Окно можно закрыть.";
     else if (blocked.length) hint = "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ");
     else if (missing.length) hint = `Нет галочки у: ${missing.map((r) => r.name).join(", ")}`;
     else hint = "Все государства готовы.";
@@ -954,7 +959,7 @@
     $("#newTurnForm").reset();
     $("#newTurnGo").disabled = true;
     $("#newTurnMsg").textContent = "";
-    $("#newTurnText").textContent = `Будет применён ход ${turns.join(", ")} для ${rows.length} ${rows.length === 1 ? "государства" : "государств"}: ${rows.map((r) => r.name).join(", ")}. Перед ходом каждая таблица копируется на ваш Диск (папка «ВПИ — бэкапы перед ходом»). Сам ход отменить нельзя, только вернуть таблицу из копии.`;
+    $("#newTurnText").textContent = `Будет применён ход ${turns.join(", ")} для ${rows.length} ${rows.length === 1 ? "государства" : "государств"}: ${rows.map((r) => r.name).join(", ")}. Перед ходом каждая таблица копируется на ваш Диск (папка «ВПИ — бэкапы перед ходом»). Если что-то пойдёт не так, ход можно откатить: «История» → «Ходы».`;
     $("#newTurnDialog").showModal();
   });
   $("#newTurnForm").addEventListener("change", (e) => {
@@ -974,6 +979,178 @@
       turnMsg(`Новый ход запущен: ${d.count} в очереди. Сервер берёт их каждую минуту, статус обновляется здесь.`);
       loadTurnBoard();
     } catch (err) { $("#newTurnMsg").textContent = err.message; $("#newTurnGo").disabled = false; }
+  });
+
+  /* ---------------- история и откат ---------------- */
+  // Три вкладки: версии границ (D1), журнал правок «Цифр» по государству, применённые с сайта ходы с копиями «перед ходом».
+  let histTab = "borders", histState = null, histTurns = null;
+  const when = (iso) => iso ? new Date(iso).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const stateName = (id) => (state.byId.get(id) || {}).name || id;
+  function histMsg(text, isError) {
+    const m = $("#historyMsg");
+    m.textContent = text || "";
+    m.classList.toggle("is-error", !!isError);
+  }
+  // Откат границ и цифр подтверждается вторым нажатием той же кнопки: он сам попадает в историю, его можно откатить.
+  function armed(btn, label) {
+    if (btn.dataset.armed) return true;
+    btn.dataset.armed = "1";
+    const old = btn.textContent;
+    btn.textContent = label;
+    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = old; } }, 5000);
+    return false;
+  }
+  function openHistory(tab, stateId) {
+    if (stateId) histState = stateId;
+    if (!$("#historyDialog").open) $("#historyDialog").showModal();
+    showHistTab(tab || histTab);
+  }
+  function showHistTab(tab) {
+    histTab = tab;
+    histMsg("");
+    document.querySelectorAll("[data-htab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.htab === tab)));
+    $("#historyStateField").hidden = tab !== "stats";
+    $("#historyHint").textContent = {
+      borders: "Каждое сохранение кисти — отдельная версия: контуры государств, провинции и клетки. «Вернуть» делает выбранную версию текущей; сам откат тоже попадает в список.",
+      stats: "Правки, записанные с сайта через «Цифры». Откат возвращает изменённые блоки к значениям до правки. Если в таблице с тех пор что-то поменялось (например, прошёл ход), сайт предупредит.",
+      turns: "Ходы, применённые с сайта. Откатить можно последний ход государства: таблица вернётся к копии «перед ходом», а текущее состояние Движок перед этим тоже сохранит копией.",
+    }[tab];
+    $("#historyBody").innerHTML = `<p class="loading">Загружаю…</p>`;
+    if (DEMO) { $("#historyBody").innerHTML = `<div class="crisis">В демо-режиме истории нет: сервер не подключён.</div>`; return; }
+    ({ borders: loadBorderVersions, stats: loadStatEdits, turns: loadTurnHistory })[tab]().catch((err) => {
+      $("#historyBody").innerHTML = `<div class="crisis">${esc(err.message)}</div>`;
+    });
+  }
+
+  async function loadBorderVersions() {
+    const { versions } = await api.admin("adminTerritoryVersions");
+    $("#historyBody").innerHTML = versions.length ? `
+      <table class="admin-table">
+        <thead><tr><th>Когда</th><th>Что</th><th>Государства на карте</th><th></th></tr></thead>
+        <tbody>${versions.map((v, i) => `
+          <tr>
+            <td class="hist__when">${esc(when(v.created))}</td>
+            <td>${esc(v.note)}</td>
+            <td>${v.states.length ? v.states.map((id) => esc(stateName(id))).join(", ") : `<span class="muted">пусто</span>`}</td>
+            <td>${i === 0 ? `<span class="muted">сейчас</span>` : `<button type="button" class="linklike" data-vrestore="${v.id}">Вернуть</button>`}</td>
+          </tr>`).join("")}</tbody>
+      </table>` : `<p class="muted">Версий пока нет: они появятся после первого сохранения кисти.</p>`;
+  }
+
+  async function loadStatEdits() {
+    const sel = $("#historyState");
+    const states = (state.data && state.data.states) || [];
+    sel.innerHTML = states.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+    if (!histState || !state.byId.has(histState)) histState = states.length ? states[0].id : null;
+    if (!histState) { $("#historyBody").innerHTML = `<p class="muted">Государств нет.</p>`; return; }
+    sel.value = histState;
+    const { edits } = await api.admin("adminStatEdits", { stateId: histState });
+    $("#historyBody").innerHTML = edits.length ? `
+      <table class="admin-table">
+        <thead><tr><th>Когда</th><th>Что изменилось</th><th></th></tr></thead>
+        <tbody>${edits.map((e) => `
+          <tr>
+            <td class="hist__when">${esc(when(e.created))}<div class="muted">ход ${e.turn}${e.undoOf ? ", откат" : ""}</div></td>
+            <td class="${e.undone ? "hist__undone" : ""}"><ul class="hist__changes">${e.changes.map((c) => `<li>${esc(c)}</li>`).join("") || "<li>без видимых изменений</li>"}</ul></td>
+            <td>${e.undone ? `<span class="muted">откачена ${esc(when(e.undone))}</span>` : `<button type="button" class="linklike" data-sundo="${e.id}">Откатить</button>`}</td>
+          </tr>`).join("")}</tbody>
+      </table>` : `<p class="muted">Правок «Цифр» с сайта пока не было. История ведётся с этого обновления.</p>`;
+  }
+
+  async function loadTurnHistory() {
+    histTurns = await api.admin("adminTurnHistory");
+    const rows = histTurns.states, can = rows.filter((r) => r.canUndo);
+    $("#historyBody").innerHTML = `
+      ${histTurns.busy ? `<p class="login__hint">Сейчас идёт ход или откат, статус — на вкладке «Ход».</p>` : ""}
+      ${can.length > 1 ? `<p><button type="button" class="btn btn--danger" data-tundo="${esc(can.map((r) => r.id).join(","))}" ${histTurns.busy ? "disabled" : ""}>Откатить последний ход у всех (${can.length})</button></p>` : ""}
+      ${rows.map((r) => `
+        <section class="hist__state-block">
+          <h3><span class="swatch" style="background:${esc(r.color)}"></span>${esc(r.name)} <span class="muted">${r.turn === null ? "" : "сейчас ход " + r.turn}</span></h3>
+          ${r.turns.length ? `<ul class="hist__changes">${r.turns.map((t) => `
+            <li class="${t.status === "undone" ? "hist__undone" : ""}">Ход ${t.turn}, ${esc(when(t.applied))}${t.status === "undone" ? " — откачен" : ""}
+              ${t.backup ? ` <a href="${esc(t.backup)}" target="_blank" rel="noopener">копия до хода</a>` : ""}</li>`).join("")}</ul>` : `<p class="muted">С сайта ходов ещё не применяли.</p>`}
+          ${r.canUndo ? `<div class="admin__links"><button type="button" class="linklike linklike--danger" data-tundo="${esc(r.id)}" ${histTurns.busy ? "disabled" : ""}>Откатить ход ${r.canUndo}</button></div>` : ""}
+        </section>`).join("") || `<p class="muted">Действующих государств нет.</p>`}`;
+  }
+
+  $("#historyBtn").addEventListener("click", () => {
+    if (window.VPI_EDITING) { alert("Сначала закройте кисть территорий."); return; }
+    openHistory();
+  });
+  $("#historyClose").addEventListener("click", () => $("#historyDialog").close());
+  document.querySelector(".hist__tabs").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-htab]");
+    if (t) showHistTab(t.dataset.htab);
+  });
+  $("#historyState").addEventListener("change", (e) => { histState = e.target.value; showHistTab("stats"); });
+  $("#historyBody").addEventListener("click", async (e) => {
+    const v = e.target.closest("[data-vrestore]");
+    if (v) {
+      if (!armed(v, "Точно вернуть?")) return;
+      v.disabled = true;
+      histMsg("Возвращаю границы…");
+      try {
+        await api.admin("adminTerritoryRestore", { versionId: Number(v.dataset.vrestore) });
+        bordersGeo = await api.borders();
+        addBorders(bordersGeo);
+        histMsg("Границы возвращены, карта обновлена.");
+        loadBorderVersions();
+      } catch (err) { histMsg(err.message, true); v.disabled = false; }
+      return;
+    }
+    const u = e.target.closest("[data-sundo]");
+    if (u) {
+      const force = !!u.dataset.force;
+      if (!force && !armed(u, "Точно откатить?")) return;
+      u.disabled = true;
+      histMsg("Откатываю правку в таблице…");
+      try {
+        const res = await api.admin("adminStatUndo", { editId: Number(u.dataset.sundo), force }).catch((err) => (err.res && err.res.conflict ? err.res : Promise.reject(err)));
+        if (!res.ok) {
+          // таблица уже не та, что после правки: второй шаг — откат «всё равно»
+          histMsg(res.error, true);
+          u.dataset.force = "1"; u.textContent = "Откатить всё равно"; u.disabled = false;
+          return;
+        }
+        state.ledgers.delete(histState);
+        await reloadPublic();
+        if (state.selected === histState) renderPanel(state.byId.get(histState));
+        histMsg(res.error || "Правка откачена, таблица пересчитана.");
+        loadStatEdits();
+      } catch (err) { histMsg(err.message, true); u.disabled = false; }
+      return;
+    }
+    const t = e.target.closest("[data-tundo]");
+    if (t) openUndoTurn(t.dataset.tundo.split(","));
+  });
+
+  // Откат хода: подтверждение двумя галочками, затем очередь на сервере, как у «Нового хода».
+  let undoIds = [];
+  function openUndoTurn(ids) {
+    undoIds = ids;
+    const rows = histTurns.states.filter((r) => ids.includes(r.id));
+    $("#undoTurnForm").reset();
+    $("#undoTurnGo").disabled = true;
+    $("#undoTurnMsg").textContent = "";
+    $("#undoTurnText").textContent = `${rows.map((r) => `${r.name}: ход ${r.canUndo} → ${r.canUndo - 1}`).join("; ")}. Таблица вернётся к копии «перед ходом»: всё, что менялось после хода (цифры, приказы, события), пропадёт. Перед откатом текущая таблица тоже копируется на Диск, ссылка и доступы игроков не меняются.`;
+    $("#undoTurnDialog").showModal();
+  }
+  $("#undoTurnForm").addEventListener("change", (e) => {
+    const f = e.currentTarget;
+    $("#undoTurnGo").disabled = !(f.c1.checked && f.c2.checked);
+  });
+  $("#undoTurnCancel").addEventListener("click", () => $("#undoTurnDialog").close());
+  $("#undoTurnForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    if (!(f.c1.checked && f.c2.checked)) return;
+    $("#undoTurnGo").disabled = true;
+    try {
+      const d = await api.admin("adminTurnUndo", { stateIds: undoIds });
+      $("#undoTurnDialog").close();
+      histMsg(`Откат запущен: ${d.count} в очереди. Сервер берёт их каждую минуту, статус — на вкладке «Ход».`);
+      loadTurnHistory();
+    } catch (err) { $("#undoTurnMsg").textContent = err.message; $("#undoTurnGo").disabled = false; }
   });
 
   /* ---------------- кисть территорий ---------------- */

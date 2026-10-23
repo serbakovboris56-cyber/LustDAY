@@ -86,6 +86,12 @@ async function handlePost(body, env, ctx, request) {
     case "adminEngine": await requireAdmin(env, body.token); return adminEngine(env, body.stateId, body.op, body);
     case "adminTurnAll": await requireAdmin(env, body.token); return adminTurnAll(env, ctx, body.turns);
     case "adminTurnRetry": await requireAdmin(env, body.token); return adminTurnRetry(env, body.jobId);
+    case "adminTerritoryVersions": await requireAdmin(env, body.token); return adminTerritoryVersions(env);
+    case "adminTerritoryRestore": await requireAdmin(env, body.token); return adminTerritoryRestore(env, body.versionId);
+    case "adminStatEdits": await requireAdmin(env, body.token); return adminStatEdits(env, body.stateId);
+    case "adminStatUndo": await requireAdmin(env, body.token); return adminStatUndo(env, ctx, body.editId, body.force);
+    case "adminTurnHistory": await requireAdmin(env, body.token); return adminTurnHistory(env, ctx);
+    case "adminTurnUndo": await requireAdmin(env, body.token); return adminTurnUndo(env, ctx, body.stateIds);
     default: throw new HttpError("Неизвестное действие");
   }
 }
@@ -576,13 +582,21 @@ async function stateRow(env, stateId) {
 }
 
 const INPUT_RANGES = ["'Статистика'!B3", "'Регионы'!A4:R21", "'Ресурсы'!B4:B10", "'Расчёты'!B70:B73", "'Расчёты'!B85:B89", "'Расчёты'!B104", "'Расчёты'!B143:B144", "'Стройки'!O4",
-  "'Журнал'!A4:R4", "'Расчёты'!B105"];
+  "'Журнал'!A4:R4", "'Расчёты'!B105", "'Расчёты'!B154"];
+// Блоки ввода «Цифр»: так же называются ключи inputs. Журнал правок хранит и откатывает их целиком.
+const INPUT_KEYS = ["name", "regions", "resources", "crises", "loyaltyDelta", "costs", "stocks", "budgetPct"];
+const INPUT_LABELS = { name: "Название", regions: "Регионы", resources: "Ресурсы", crises: "Кризисы", loyaltyDelta: "Поправки лояльности", costs: "Расходы хода", stocks: "Стартовые запасы", budgetPct: "Бюджет стройки" };
 // Стартовые запасы — строка хода 0 Журнала (дальше остатки переносятся формулами) и «Клирика начало».
 // Колонки строки 4: I/J — фонд стройки (ремесло/монеты), O — склад, R — казна.
 const STOCK_CELLS = { fundCraft: 8, fundCoins: 9, warehouse: 14, treasury: 17 };
 
 async function adminReadInputs(env, stateId) {
   const r = await stateRow(env, stateId);
+  const { inputs } = await readInputs(env, r);
+  return { ok: true, inputs };
+}
+
+async function readInputs(env, r) {
   const qs = INPUT_RANGES.map((x) => "ranges=" + encodeURIComponent(x)).join("&");
   const data = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`);
   const v = data.valueRanges.map((x) => x.values || []);
@@ -596,7 +610,7 @@ async function adminReadInputs(env, stateId) {
       estates: ESTATE_KEYS.map((_, k) => num(row[3 + k])), loyalty: ESTATE_KEYS.map((_, k) => num(row[8 + k])), buildings: String(row[17] || "") });
   }
   return {
-    ok: true,
+    turn: num(cell(v[10], 0)),
     inputs: {
       name: String(cell(v[0], 0)),
       regions,
@@ -610,9 +624,24 @@ async function adminReadInputs(env, stateId) {
   };
 }
 
-async function adminWriteInputs(env, ctx, stateId, inp) {
+async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   const r = await stateRow(env, stateId);
   if (!inp || typeof inp !== "object") return { ok: false, error: "Нет данных." };
+  const data = inputsData(inp);
+  if (!data.length) return { ok: false, error: "Нечего сохранять." };
+  // старые значения — для журнала правок и отката; без них запись всё равно идёт
+  const before = await readInputs(env, r).catch(() => null);
+  await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
+  const after = await readInputs(env, r).catch(() => null);
+  if (before && after) await logStatEdit(env, r.id, INPUT_KEYS.filter((k) => inp[k] !== undefined), before, after, undoOf).catch((e) => console.error(e));
+  // пересобираем цифры этого государства, чтобы сайт сразу показал новое
+  const snap = await refreshOneState(env, r.id);
+  const s = snap.states.find((x) => x.id === r.id);
+  return { ok: true, ledger: s && s.ledger, public: s && s.public, error: s && s.error ? "Записано, но чтение не удалось: " + s.error : undefined };
+}
+
+// Ячейки для values:batchUpdate по присланным блокам ввода.
+function inputsData(inp) {
   const n = (x, min = -1e9, max = 1e12) => { const v = Number(x); return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : 0; };
   const data = [];
   if (inp.name !== undefined) data.push({ range: "'Статистика'!B3", values: [[String(inp.name).slice(0, 80)]] });
@@ -631,7 +660,7 @@ async function adminWriteInputs(env, ctx, stateId, inp) {
   }
   if (inp.budgetPct !== undefined) data.push({ range: "'Стройки'!O4", values: [[Math.round(n(inp.budgetPct, 0, 100))]] });
   if (Array.isArray(inp.regions)) {
-    if (inp.regions.length > 18) return { ok: false, error: "Регионов не больше 18." };
+    if (inp.regions.length > 18) throw new HttpError("Регионов не больше 18.");
     // Строки 4..21 переписываем по порядку; формулы в C, N–Q не трогаем.
     const ab = [], dm = [], rr = [];
     for (let i = 0; i < 18; i++) {
@@ -644,12 +673,106 @@ async function adminWriteInputs(env, ctx, stateId, inp) {
     }
     data.push({ range: "'Регионы'!A4:B21", values: ab }, { range: "'Регионы'!D4:M21", values: dm }, { range: "'Регионы'!R4:R21", values: rr });
   }
-  if (!data.length) return { ok: false, error: "Нечего сохранять." };
-  await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
-  // пересобираем цифры этого государства, чтобы сайт сразу показал новое
-  const snap = await refreshOneState(env, r.id);
-  const s = snap.states.find((x) => x.id === r.id);
-  return { ok: true, ledger: s && s.ledger, public: s && s.public, error: s && s.error ? "Записано, но чтение не удалось: " + s.error : undefined };
+  return data;
+}
+
+/* ============================================================
+ * ЖУРНАЛ ПРАВОК «ЦИФР» И ОТКАТ
+ * Перед записью с сайта сохраняем старые значения блоков, после — то, что реально легло в таблицу.
+ * Откат пишет «было» обратно, но только если в таблице всё ещё «стало»; иначе спрашивает подтверждение.
+ * ============================================================ */
+const STAT_EDITS_KEEP = 60;   // правок на государство
+let statEditsReady = false;
+async function ensureStatEdits(env) {
+  if (statEditsReady) return;
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS stat_edits (id INTEGER PRIMARY KEY AUTOINCREMENT, state_id TEXT NOT NULL, created TEXT NOT NULL,
+      turn INTEGER NOT NULL DEFAULT 0, keys TEXT NOT NULL, before TEXT NOT NULL, after TEXT NOT NULL, undo_of INTEGER NOT NULL DEFAULT 0, undone TEXT NOT NULL DEFAULT '')`),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS stat_edits_state ON stat_edits (state_id, id)"),
+  ]);
+  statEditsReady = true;
+}
+
+// Регион без номера строки: строки сдвигаются при удалении региона, сравниваем по содержимому.
+const inputBlock = (inputs, k) => (k === "regions" ? (inputs.regions || []).map(({ row, ...g }) => g) : inputs[k]);
+const pickInputs = (inputs, keys) => Object.fromEntries(keys.map((k) => [k, inputBlock(inputs, k)]));
+const sameBlock = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// Короткий список «что поменялось» для истории: до 14 строк.
+function diffInputs(b, a, keys) {
+  const out = [];
+  const num = (x) => (Number.isFinite(x) ? Math.round(x * 100) / 100 : x);
+  const pair = (label, x, y) => { if (!sameBlock(x, y)) out.push(`${label}: ${num(x)} → ${num(y)}`); };
+  for (const k of keys) {
+    const x = b[k], y = a[k];
+    if (sameBlock(x, y)) continue;
+    if (k === "name") pair("Название", x, y);
+    else if (k === "budgetPct") pair("Бюджет стройки, %", x, y);
+    else if (k === "stocks") {
+      const L = { treasury: "Казна", warehouse: "Склад", fundCraft: "Фонд, ремесло", fundCoins: "Фонд, монеты", clerics: "Клирика" };
+      Object.keys(L).forEach((f) => pair(L[f], x[f], y[f]));
+    } else if (k === "costs") {
+      const L = { craft: "Расход ремесла", coins: "Расход монет", cleric: "Расход клирики" };
+      Object.keys(L).forEach((f) => pair(L[f], x[f], y[f]));
+    } else if (k === "resources") x.forEach((r, i) => pair(r.name, r.count, y[i] && y[i].count));
+    else if (k === "loyaltyDelta") x.forEach((r, i) => pair("Поправка: " + r.name, r.value, y[i] && y[i].value));
+    else if (k === "crises") x.forEach((r, i) => { if (y[i] && r.on !== y[i].on) out.push(`${r.name}: ${y[i].on ? "включён" : "выключен"}`); });
+    else if (k === "regions") {
+      const names = new Set([...x.map((g) => g.name), ...y.map((g) => g.name)]);
+      for (const name of names) {
+        const g = x.find((r) => r.name === name), h = y.find((r) => r.name === name);
+        if (!g) { out.push(`Регион «${name}» добавлен`); continue; }
+        if (!h) { out.push(`Регион «${name}» убран`); continue; }
+        if (sameBlock(g, h)) continue;
+        const parts = [];
+        ESTATES.forEach((e, i) => { if (g.estates[i] !== h.estates[i]) parts.push(`${e} ${g.estates[i]} → ${h.estates[i]}`); });
+        ESTATES.forEach((e, i) => { if (g.loyalty[i] !== h.loyalty[i]) parts.push(`лоял. ${e.toLowerCase()} ${g.loyalty[i]} → ${h.loyalty[i]}`); });
+        if (g.type !== h.type) parts.push(`тип ${g.type} → ${h.type}`);
+        if (g.buildings !== h.buildings) parts.push("постройки");
+        out.push(`${name}: ${parts.join(", ") || "порядок"}`);
+      }
+    }
+  }
+  return out.length > 14 ? [...out.slice(0, 13), `и ещё ${out.length - 13}`] : out;
+}
+
+async function logStatEdit(env, stateId, keys, before, after, undoOf) {
+  await ensureStatEdits(env);
+  const b = pickInputs(before.inputs, keys), a = pickInputs(after.inputs, keys);
+  if (sameBlock(b, a)) return;   // ничего не поменялось — в историю не пишем
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO stat_edits (state_id, created, turn, keys, before, after, undo_of) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
+      .bind(stateId, new Date().toISOString(), after.turn || 0, JSON.stringify(keys), JSON.stringify(b), JSON.stringify(a), undoOf || 0),
+    env.DB.prepare("DELETE FROM stat_edits WHERE state_id = ?1 AND id NOT IN (SELECT id FROM stat_edits WHERE state_id = ?1 ORDER BY id DESC LIMIT ?2)").bind(stateId, STAT_EDITS_KEEP),
+  ]);
+}
+
+async function adminStatEdits(env, stateId) {
+  await ensureStatEdits(env);
+  const { results } = await env.DB.prepare("SELECT * FROM stat_edits WHERE state_id = ? ORDER BY id DESC LIMIT 30").bind(String(stateId || "")).all();
+  return { ok: true, edits: results.map((e) => {
+    const keys = JSON.parse(e.keys);
+    return { id: e.id, created: e.created, turn: e.turn, undoOf: e.undo_of, undone: e.undone, changes: diffInputs(JSON.parse(e.before), JSON.parse(e.after), keys) };
+  }) };
+}
+
+async function adminStatUndo(env, ctx, editId, force) {
+  await ensureStatEdits(env);
+  const e = await env.DB.prepare("SELECT * FROM stat_edits WHERE id = ?").bind(Number(editId)).first();
+  if (!e) return { ok: false, error: "Правка не найдена." };
+  if (e.undone) return { ok: false, error: "Эта правка уже откачена." };
+  const r = await stateRow(env, e.state_id);
+  const keys = JSON.parse(e.keys), before = JSON.parse(e.before), after = JSON.parse(e.after);
+  const cur = await readInputs(env, r);
+  const changed = keys.filter((k) => !sameBlock(inputBlock(cur.inputs, k), after[k]));
+  if (changed.length && !force) {
+    return { ok: false, conflict: changed.map((k) => INPUT_LABELS[k] || k),
+      error: `После этой правки в таблице изменились: ${changed.map((k) => INPUT_LABELS[k] || k).join(", ")}` + (cur.turn !== e.turn ? ` (с тех пор применён ход ${cur.turn})` : "") +
+        ". Откат вернёт эти блоки к значениям до правки, более поздние изменения в них пропадут." };
+  }
+  const res = await adminWriteInputs(env, ctx, e.state_id, before, e.id);
+  if (res.ok) await env.DB.prepare("UPDATE stat_edits SET undone = ? WHERE id = ?").bind(new Date().toISOString(), e.id).run();
+  return res;
 }
 
 async function driveFetch(env, path, init = {}) {
@@ -726,12 +849,82 @@ function cleanProvinces(p) {
   return { lines, labels };
 }
 
+/* ---------- версии территорий ----------
+ * После каждого сохранения кисти — снимок всего: сетка клеток, контуры и провинции всех государств (gzip в D1).
+ * Самое первое сохранение сперва записывает состояние «до истории». Откат делает выбранный снимок текущим
+ * и сам становится новой версией, так что откат тоже можно откатить. */
+const TERRITORY_VERSIONS_KEEP = 40;
+let territoryVersionsReady = false;
+async function ensureTerritoryVersions(env) {
+  if (territoryVersionsReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS territory_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', states TEXT NOT NULL DEFAULT '[]', data TEXT NOT NULL)").run();
+  territoryVersionsReady = true;
+}
+
+async function gzipText(text) {
+  const buf = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+  let bin = ""; const u = new Uint8Array(buf);
+  for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function gunzipText(b64) {
+  const u = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+}
+
+async function currentTerritories(env, gridNow) {
+  await ensureProvinceTable(env);
+  const [grid, b, p] = await Promise.all([
+    gridNow ? JSON.stringify(gridNow) : env.KV.get("territory_grid"),   // KV лишь «в итоге» согласован: только что записанное берём из рук
+    env.DB.prepare("SELECT state_id, geometry FROM borders").all(),
+    env.DB.prepare("SELECT state_id, data FROM provinces").all(),
+  ]);
+  return { grid: grid ? JSON.parse(grid) : null, borders: Object.fromEntries(b.results.map((r) => [r.state_id, JSON.parse(r.geometry)])),
+    provinces: Object.fromEntries(p.results.map((r) => [r.state_id, JSON.parse(r.data)])) };
+}
+
+async function saveTerritoryVersion(env, note, snap) {
+  await ensureTerritoryVersions(env);
+  snap = snap || await currentTerritories(env);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO territory_versions (created, note, states, data) VALUES (?1, ?2, ?3, ?4)")
+      .bind(new Date().toISOString(), note, JSON.stringify(Object.keys(snap.borders)), await gzipText(JSON.stringify(snap))),
+    env.DB.prepare("DELETE FROM territory_versions WHERE id NOT IN (SELECT id FROM territory_versions ORDER BY id DESC LIMIT ?)").bind(TERRITORY_VERSIONS_KEEP),
+  ]);
+}
+
+async function adminTerritoryVersions(env) {
+  await ensureTerritoryVersions(env);
+  const { results } = await env.DB.prepare("SELECT id, created, note, states FROM territory_versions ORDER BY id DESC").all();
+  return { ok: true, versions: results.map((v) => ({ id: v.id, created: v.created, note: v.note, states: JSON.parse(v.states) })) };
+}
+
+async function adminTerritoryRestore(env, versionId) {
+  await ensureTerritoryVersions(env);
+  const v = await env.DB.prepare("SELECT * FROM territory_versions WHERE id = ?").bind(Number(versionId)).first();
+  if (!v) return { ok: false, error: "Версия не найдена." };
+  const snap = JSON.parse(await gunzipText(v.data));
+  await ensureProvinceTable(env);
+  const now = new Date().toISOString();
+  const stmts = [env.DB.prepare("DELETE FROM borders"), env.DB.prepare("DELETE FROM provinces")];
+  for (const [id, g] of Object.entries(snap.borders || {})) stmts.push(env.DB.prepare("INSERT INTO borders (state_id, geometry, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(g), now));
+  for (const [id, p] of Object.entries(snap.provinces || {})) stmts.push(env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(p), now));
+  await env.DB.batch(stmts);   // одна транзакция: карта не останется наполовину старой
+  if (snap.grid) await env.KV.put("territory_grid", JSON.stringify(snap.grid)); else await env.KV.delete("territory_grid");
+  const when = new Date(v.created).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  await saveTerritoryVersion(env, `Откат к версии от ${when}`, snap);
+  return { ok: true };
+}
+
 // Кисть территорий: сетка клеток (с провинциями) хранится в KV, контуры государств — в borders, провинции — в provinces.
 async function adminSaveTerritories(env, grid, geometries, provinces) {
   if (!grid || !Array.isArray(grid.rle) || !Array.isArray(grid.owners)) return { ok: false, error: "Нет данных сетки." };
   if (!geometries || typeof geometries !== "object") return { ok: false, error: "Нет контуров." };
   const prov = grid.prov && Array.isArray(grid.prov.rle) ? { rle: grid.prov.rle, names: grid.prov.names || {} } : undefined;
-  await env.KV.put("territory_grid", JSON.stringify({ w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, updated: new Date().toISOString() }));
+  await ensureTerritoryVersions(env);
+  if (!(await env.DB.prepare("SELECT id FROM territory_versions LIMIT 1").first())) await saveTerritoryVersion(env, "Как было до истории версий");
+  const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, updated: new Date().toISOString() };
+  await env.KV.put("territory_grid", JSON.stringify(gridNow));
   await ensureProvinceTable(env);
   const now = new Date().toISOString();
   const stmts = [];
@@ -746,6 +939,7 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
     else stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(id));
   }
   if (stmts.length) await env.DB.batch(stmts);
+  await saveTerritoryVersion(env, "Сохранение кисти", await currentTerritories(env, gridNow)).catch((e) => console.error(e));
   return { ok: true };
 }
 
@@ -768,6 +962,10 @@ async function ensureTurnTables(env) {
       created TEXT NOT NULL, started TEXT NOT NULL DEFAULT '', finished TEXT NOT NULL DEFAULT '')`),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status)"),
   ]);
+  // kind: apply — ход, restore — откат хода из копии backup; safety — копия, снятая Движком перед откатом
+  for (const col of ["kind TEXT NOT NULL DEFAULT 'apply'", "safety TEXT NOT NULL DEFAULT ''"]) {
+    try { await env.DB.prepare("ALTER TABLE turn_jobs ADD COLUMN " + col).run(); } catch { /* колонка уже есть */ }
+  }
   turnTablesReady = true;
 }
 
@@ -822,7 +1020,7 @@ async function turnRows(env, ctx) {
       ready: !!(mark && mark.ready && turn !== null && mark.turn === turn + 1),
       blocking: problems.some((p) => /нет таблицы|не читается|не собраны/.test(p)),
       problems, crises: L_ ? L_.crises : [],
-      job: job ? { id: job.id, status: job.status, error: job.error, backup: job.backup, turn: job.expected_turn } : null,
+      job: job ? { id: job.id, kind: job.kind || "apply", status: job.status, error: job.error, backup: job.backup, safety: job.safety, turn: job.expected_turn } : null,
     };
   });
   return { rows, busy: last.some((j) => j.status === "pending" || j.status === "running"), batch: last.length ? last[0].batch : "" };
@@ -857,7 +1055,7 @@ async function adminTurnAll(env, ctx, turnsSeen) {
   const cfg = await engineConfig(env);
   if (!cfg.url || !cfg.secret) return { ok: false, error: "Движок не подключён: «Управление» → «Движок хода»." };
   const { rows, busy } = await turnRows(env, ctx);
-  if (busy) return { ok: false, error: "Предыдущий «Новый ход» ещё идёт." };
+  if (busy) return { ok: false, error: "Предыдущий ход или откат ещё идёт." };
   if (!rows.length) return { ok: false, error: "Нет действующих государств." };
   const blocked = rows.filter((r) => r.blocking);
   if (blocked.length) return { ok: false, error: "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ") };
@@ -890,6 +1088,7 @@ async function processTurnQueue(env) {
 }
 
 async function runTurnJob(env, job) {
+  if (job.kind === "restore") return runRestoreJob(env, job);
   let status = "done", error = "", backup = "";
   try {
     const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
@@ -900,5 +1099,70 @@ async function runTurnJob(env, job) {
     else { status = "error"; error = d.error || "ошибка Движка"; }
   } catch (e) { status = "error"; error = String(e && e.message || e); }
   await env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, backup=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), backup, new Date().toISOString(), job.id).run();
+  if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
+}
+
+/* ============================================================
+ * ОТКАТ ХОДА
+ * Движок возвращает таблицу к копии «перед ходом» (та же таблица, переписываются отличающиеся ячейки).
+ * Откатить можно только последний применённый ход государства; потом — предыдущий, и так далее.
+ * ============================================================ */
+async function undoCandidates(env, ctx) {
+  await ensureTurnTables(env);
+  const [regs, snap, jobs] = await Promise.all([
+    registry(env),
+    getSnapshot(env, ctx).catch(() => ({ states: [] })),
+    env.DB.prepare("SELECT * FROM turn_jobs WHERE kind = 'apply' AND status IN ('done', 'undone') ORDER BY id DESC LIMIT 400").all().then((r) => r.results),
+  ]);
+  return regs.filter((r) => r.active).map((r) => {
+    const s = snap.states.find((x) => x.id === r.id) || {};
+    const turn = s.ledger ? s.ledger.turn : null;
+    const mine = jobs.filter((j) => j.state_id === r.id);
+    const last = mine.find((j) => j.status === "done");
+    const undo = last && last.backup && turn !== null && last.expected_turn === turn ? last : null;
+    return { id: r.id, name: r.name || r.id, color: r.color, turn, undo,
+      turns: mine.slice(0, 12).map((j) => ({ turn: j.expected_turn, status: j.status, applied: j.finished, backup: j.backup })) };
+  });
+}
+
+async function adminTurnHistory(env, ctx) {
+  const list = await undoCandidates(env, ctx);
+  const { busy } = await turnRows(env, ctx);
+  return { ok: true, busy, states: list.map(({ undo, ...x }) => ({ ...x, canUndo: undo ? undo.expected_turn : null })) };
+}
+
+async function adminTurnUndo(env, ctx, stateIds) {
+  const cfg = await engineConfig(env);
+  if (!cfg.url || !cfg.secret) return { ok: false, error: "Движок не подключён: «Управление» → «Движок хода»." };
+  const { busy } = await turnRows(env, ctx);
+  if (busy) return { ok: false, error: "Сейчас идёт ход или откат, дождитесь конца." };
+  const ids = new Set((Array.isArray(stateIds) ? stateIds : []).map(String));
+  const list = (await undoCandidates(env, ctx)).filter((x) => ids.has(x.id));
+  if (!list.length) return { ok: false, error: "Не выбраны государства." };
+  const no = list.filter((x) => !x.undo);
+  if (no.length) return { ok: false, error: "Нечего откатывать у: " + no.map((x) => x.name).join(", ") + ". Откатывается только последний ход, применённый с сайта, и только пока в таблице этот ход." };
+  const batch = new Date().toISOString();
+  await env.DB.batch(list.map((x) => env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created, kind, backup) VALUES (?1, ?2, ?3, 'pending', ?1, 'restore', ?4)")
+    .bind(batch, x.id, x.undo.expected_turn, x.undo.backup)));
+  return { ok: true, batch, count: list.length };
+}
+
+async function runRestoreJob(env, job) {
+  let status = "done", error = "", safety = "";
+  try {
+    const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
+    if (!r || !r.sheet_id) throw new Error("у государства нет таблицы");
+    const d = await engineCall(env, { action: "restore", sheetId: r.sheet_id, turn: job.expected_turn, backupId: sheetIdFromLink(job.backup) });
+    if (d.ok) safety = d.safetyUrl || "";
+    else if (d.code === "already") error = "ход уже был откачен раньше";
+    else { status = "error"; error = /Неизвестная команда/.test(d.error || "") ? "Движок старой версии: обновите его развёртывание (engine/README.md)" : d.error || "ошибка Движка"; }
+  } catch (e) { status = "error"; error = String(e && e.message || e); }
+  const stmts = [env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, safety=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), safety, new Date().toISOString(), job.id)];
+  if (status === "done") {
+    stmts.push(env.DB.prepare("UPDATE turn_jobs SET status='undone' WHERE kind='apply' AND status='done' AND state_id=? AND expected_turn=?").bind(job.state_id, job.expected_turn));
+    // галочка «заполнено» стояла на откаченный ход — после отката данные надо проверить заново
+    stmts.push(env.DB.prepare("UPDATE turn_marks SET ready=0 WHERE state_id=?").bind(job.state_id));
+  }
+  await env.DB.batch(stmts);
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
 }

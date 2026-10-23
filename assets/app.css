@@ -323,13 +323,17 @@ button { font: inherit; color: inherit; }
   .admin-table td:last-child { grid-column: 1 / -1; }
 }
 #adminMsg { color: var(--gold-soft); }
-#adminMsg.is-error { color: var(--deficit); }
+#adminMsg.is-error, #historyMsg.is-error { color: var(--deficit); }
 @media (max-width: 720px) {
   .bar { gap: 8px; padding: 0 12px; }
   .bar__title { min-width: 0; }
   .bar h1 { font-size: 17px; white-space: nowrap; }
   .bar__sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .bar__actions { gap: 6px; flex: none; }
+  /* у администратора кнопок много: на узком экране они прокручиваются вбок, заголовок не налезает */
+  .bar__title { flex: 0 1 auto; min-width: 120px; overflow: hidden; }
+  .bar__actions { gap: 6px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 4px 0; }
+  .bar__actions::-webkit-scrollbar { display: none; }
+  .bar__actions > * { flex: none; }
   .bar .btn { padding: 6px 10px; font-size: 14px; }
 }
 
@@ -401,3 +405,17 @@ button { font: inherit; color: inherit; }
 .turn__full { margin-top: 12px; }
 .turn__full summary { cursor: pointer; color: var(--gold); }
 .turn__full pre { white-space: pre-wrap; font-size: 13px; max-height: 50vh; overflow: auto; border: 1px solid var(--rule); padding: 8px; }
+
+/* ---------- история и откат ---------- */
+.hist__tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.hist__tabs [aria-selected="true"] { background: var(--gold); color: var(--ink); }
+.hist__state[hidden] { display: none; }
+.hist__state { display: grid; gap: 4px; font-size: 14px; color: var(--gold-soft); max-width: 320px; }
+.hist__changes { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--gold-soft); }
+.hist__changes li { margin: 2px 0; }
+.hist__changes a { color: var(--gold); }
+.hist__when { white-space: nowrap; }
+.hist__state-block { margin-top: 14px; }
+.hist__state-block h3 { margin: 0 0 4px; font: 700 17px/1.2 var(--serif); display: flex; align-items: center; gap: 8px; }
+.hist__undone { color: var(--gold-soft); text-decoration: line-through; }
+#statsDialog .login__actions { flex-wrap: wrap; }
