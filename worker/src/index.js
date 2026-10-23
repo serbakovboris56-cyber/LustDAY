@@ -23,7 +23,7 @@ export default {
     try {
       if (request.method === "GET") {
         const action = new URL(request.url).searchParams.get("action") || "public";
-        if (action === "public") return reply(await publicPayload(env, ctx));
+        if (action === "public") return reply(await withFreeze(env, await publicPayload(env, ctx)));
         if (action === "borders") return reply(await bordersPayload(env));
         if (action === "ping") return reply({ ok: true, time: new Date().toISOString(), google: !!env.GOOGLE_SA_KEY, admin: !!adminSecret(env) });
         return reply({ ok: false, error: "Неизвестное действие" }, 404);
@@ -66,7 +66,8 @@ async function handlePost(body, env, ctx, request) {
     case "login": return login(env, body.login, body.password, request);
     case "ledger": return ledger(env, ctx, body.token, body.stateId);
     case "session": return renewSession(env, body.token);
-    case "adminRefresh": await requireAdmin(env, body.token); await refreshSnapshot(env); return { ok: true, ...(await publicPayload(env, ctx)) };
+    case "private": return privatePayload(env, ctx, body.token);
+    case "adminRefresh": await requireAdmin(env, body.token); await refreshSnapshot(env); return { ok: true, ...(await withFreeze(env, await publicPayload(env, ctx))) };
     case "adminStates": await requireAdmin(env, body.token); return { ok: true, states: await adminStates(env, ctx) };
     case "adminSaveState": await requireAdmin(env, body.token); return adminSaveState(env, body.state);
     case "adminDeleteState": await requireAdmin(env, body.token); return adminDeleteState(env, body.stateId);
@@ -82,9 +83,10 @@ async function handlePost(body, env, ctx, request) {
     case "adminGetGrid": await requireAdmin(env, body.token); return { ok: true, grid: JSON.parse((await env.KV.get("territory_grid")) || "null") };
     case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries, body.provinces);
     case "adminTurnBoard": await requireAdmin(env, body.token); return adminTurnBoard(env, ctx);
-    case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn);
+    case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn, body.orders);
+    case "adminFreeze": await requireAdmin(env, body.token); return adminFreeze(env, ctx, body.stateId, !!body.frozen);
     case "adminEngine": await requireAdmin(env, body.token); return adminEngine(env, body.stateId, body.op, body);
-    case "adminTurnAll": await requireAdmin(env, body.token); return adminTurnAll(env, ctx, body.turns);
+    case "adminTurnAll": await requireAdmin(env, body.token); return adminTurnAll(env, ctx, body.turns, body.freeze);
     case "adminTurnRetry": await requireAdmin(env, body.token); return adminTurnRetry(env, body.jobId);
     case "adminTerritoryVersions": await requireAdmin(env, body.token); return adminTerritoryVersions(env);
     case "adminTerritoryRestore": await requireAdmin(env, body.token); return adminTerritoryRestore(env, body.versionId);
@@ -492,6 +494,7 @@ async function adminDeleteState(env, stateId) {
     env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(stateId),
   ]);
   if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
+  await clearOrders(env, stateId);   // новое государство с тем же ID не должно унаследовать пропуски и заморозку
   await env.KV.delete("pending:" + stateId);
   // убираем из снимка сразу, иначе государство висело бы на сайте до следующего сбора цифр
   const text = await env.KV.get("snapshot");
@@ -962,10 +965,15 @@ async function ensureTurnTables(env) {
       created TEXT NOT NULL, started TEXT NOT NULL DEFAULT '', finished TEXT NOT NULL DEFAULT '')`),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status)"),
   ]);
-  // kind: apply — ход, restore — откат хода из копии backup; safety — копия, снятая Движком перед откатом
-  for (const col of ["kind TEXT NOT NULL DEFAULT 'apply'", "safety TEXT NOT NULL DEFAULT ''"]) {
-    try { await env.DB.prepare("ALTER TABLE turn_jobs ADD COLUMN " + col).run(); } catch { /* колонка уже есть */ }
+  // kind: apply — ход, restore — откат хода из копии backup, freeze — государство заморожено вместо хода;
+  // safety — копия, снятая Движком перед откатом; had_order и misses_before — учёт приказов (см. ЗАМОРОЗКА)
+  const cols = [["turn_jobs", "kind TEXT NOT NULL DEFAULT 'apply'"], ["turn_jobs", "safety TEXT NOT NULL DEFAULT ''"],
+    ["turn_jobs", "had_order INTEGER NOT NULL DEFAULT 1"], ["turn_jobs", "misses_before INTEGER NOT NULL DEFAULT 0"],
+    ["turn_marks", "orders INTEGER NOT NULL DEFAULT 0"]];
+  for (const [table, col] of cols) {
+    try { await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${col}`).run(); } catch { /* колонка уже есть */ }
   }
+  await ensureOrders(env);
   turnTablesReady = true;
 }
 
@@ -990,34 +998,46 @@ async function engineCall(env, payload) {
   }
 }
 
-// Строки вкладки «Ход»: номер хода из снимка, галочка на следующий ход, проблемы таблицы, итог последнего «Нового хода».
+// Строки вкладки «Ход»: номер хода из снимка, галочки «заполнено» и «приказ есть» на следующий ход, пропуски приказов,
+// заморозка, проблемы таблицы, итог последнего «Нового хода».
 async function turnRows(env, ctx) {
   await ensureTurnTables(env);
-  const [regs, snap, marks, last] = await Promise.all([
+  const [regs, snap, marks, last, orders] = await Promise.all([
     registry(env),
     getSnapshot(env, ctx).catch(() => ({ states: [] })),
     env.DB.prepare("SELECT * FROM turn_marks").all().then((r) => r.results),
     env.DB.prepare("SELECT * FROM turn_jobs WHERE batch = (SELECT batch FROM turn_jobs ORDER BY id DESC LIMIT 1)").all().then((r) => r.results),
+    ordersById(env),
   ]);
-  const maxTurn = snapTurn(snap.states);
-  const rows = regs.filter((r) => r.active).map((r) => {
-    const s = snap.states.find((x) => x.id === r.id) || {};
+  const byId = new Map(snap.states.map((s) => [s.id, s]));
+  const markById = new Map(marks.map((m) => [m.state_id, m]));
+  const active = regs.filter((r) => r.active);
+  // замороженные стоят на месте, по ним «отставание» других не считаем
+  const maxTurn = snapTurn(active.filter((r) => !(orders.get(r.id) || {}).frozen).map((r) => byId.get(r.id) || {}));
+  const rows = active.map((r) => {
+    const s = byId.get(r.id) || {};
     const L_ = s.ledger;
     const turn = L_ ? L_.turn : null;
-    const mark = marks.find((m) => m.state_id === r.id);
+    const mark = markById.get(r.id);
+    const cur = !!(mark && turn !== null && mark.turn === turn + 1);   // галочки стоят на этот ход, а не на прошлый
     const job = last.find((j) => j.state_id === r.id);
+    const o = orders.get(r.id) || { misses: 0, frozen: 0, frozen_turn: 0 };
+    const frozen = !!o.frozen, hasOrder = cur && !!mark.orders;
     const problems = [];
     if (!r.sheet_id) problems.push("нет таблицы");
     else if (s.error) problems.push("таблица не читается: " + s.error);
     else if (!L_) problems.push("цифры ещё не собраны");
-    if (L_) {
+    else if (s.readError) problems.push("таблица не читается: " + s.readError);
+    if (L_ && !frozen) {
       if (turn < maxTurn) problems.push(`отстала: ход ${turn}, у других ${maxTurn}`);
       if (L_.pools.treasury.stock < 0) problems.push("казна в минусе");
       if (L_.pools.warehouse.stock < 0) problems.push("склад в минусе");
     }
     return {
       id: r.id, name: r.name || r.id, color: r.color, sheetId: r.sheet_id, turn, nextTurn: turn === null ? null : turn + 1,
-      ready: !!(mark && mark.ready && turn !== null && mark.turn === turn + 1),
+      ready: cur && !!mark.ready, orders: hasOrder, misses: o.misses, frozen, frozenTurn: frozen ? o.frozen_turn : null,
+      // без приказа этот ход станет FREEZE_AFTER-м пропуском подряд: «Новый ход» заморозит государство вместо хода
+      willFreeze: !frozen && !hasOrder && o.misses + 1 >= FREEZE_AFTER,
       blocking: problems.some((p) => /нет таблицы|не читается|не собраны/.test(p)),
       problems, crises: L_ ? L_.crises : [],
       job: job ? { id: job.id, kind: job.kind || "apply", status: job.status, error: job.error, backup: job.backup, safety: job.safety, turn: job.expected_turn } : null,
@@ -1031,12 +1051,13 @@ async function adminTurnBoard(env, ctx) {
   return { ok: true, engine: !!(cfg.url && cfg.secret), ...(await turnRows(env, ctx)) };
 }
 
-async function adminTurnMark(env, stateId, ready, turn) {
+// Галочки на следующий ход: «данные хода заполнены» и «приказ есть» (приказы приходят в ВК, их отмечает админ).
+async function adminTurnMark(env, stateId, ready, turn, orders) {
   await ensureTurnTables(env);
   turn = Number(turn);
   if (!stateId || !turn) return { ok: false, error: "Не указано государство или ход." };
-  await env.DB.prepare("INSERT INTO turn_marks (state_id, turn, ready, updated) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(state_id) DO UPDATE SET turn=?2, ready=?3, updated=?4")
-    .bind(String(stateId), turn, ready ? 1 : 0, new Date().toISOString()).run();
+  await env.DB.prepare("INSERT INTO turn_marks (state_id, turn, ready, orders, updated) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(state_id) DO UPDATE SET turn=?2, ready=?3, orders=?4, updated=?5")
+    .bind(String(stateId), turn, ready ? 1 : 0, orders ? 1 : 0, new Date().toISOString()).run();
   return { ok: true };
 }
 
@@ -1047,25 +1068,46 @@ async function adminEngine(env, stateId, op, extra = {}) {
   const r = await stateRow(env, stateId);
   const payload = { action: op, sheetId: r.sheet_id };
   if (op === "saveOrder") Object.assign(payload, { orderText: String(extra.orderText || "").slice(0, 2000), verdictText: String(extra.verdictText || "").slice(0, 2000) });
-  return engineCall(env, payload);
+  const d = await engineCall(env, payload);
+  // записанный приказ — это и есть «приказ есть» на следующий ход; галочку «заполнено» того же хода не трогаем
+  if (op === "saveOrder" && d.ok && payload.orderText.trim() && Number.isFinite(Number(d.turn))) {
+    await ensureTurnTables(env);
+    await env.DB.prepare(`INSERT INTO turn_marks (state_id, turn, ready, orders, updated) VALUES (?1, ?2, 0, 1, ?3)
+        ON CONFLICT(state_id) DO UPDATE SET ready = CASE WHEN turn_marks.turn = ?2 THEN turn_marks.ready ELSE 0 END, turn=?2, orders=1, updated=?3`)
+      .bind(r.id, Number(d.turn) + 1, new Date().toISOString()).run();
+    d.orders = true;
+  }
+  return d;
 }
 
-// «Новый ход»: только когда у всех действующих государств стоит галочка и таблицы читаются.
-async function adminTurnAll(env, ctx, turnsSeen) {
+// «Новый ход»: у всех действующих незамороженных государств стоит галочка «заполнено» и таблицы читаются.
+// Государство без приказа, у которого это FREEZE_AFTER-й пропуск подряд, вместо хода замораживается.
+async function adminTurnAll(env, ctx, turnsSeen, freezeSeen) {
   const cfg = await engineConfig(env);
   if (!cfg.url || !cfg.secret) return { ok: false, error: "Движок не подключён: «Управление» → «Движок хода»." };
-  const { rows, busy } = await turnRows(env, ctx);
+  const { rows: all, busy } = await turnRows(env, ctx);
   if (busy) return { ok: false, error: "Предыдущий ход или откат ещё идёт." };
-  if (!rows.length) return { ok: false, error: "Нет действующих государств." };
-  const blocked = rows.filter((r) => r.blocking);
+  const rows = all.filter((r) => !r.frozen);
+  if (!rows.length) return { ok: false, error: "Нет действующих государств: все заморожены или скрыты." };
+  const toFreeze = rows.filter((r) => r.willFreeze && r.nextTurn !== null);
+  const toApply = rows.filter((r) => !toFreeze.includes(r));
+  const blocked = toApply.filter((r) => r.blocking);
   if (blocked.length) return { ok: false, error: "Не читаются таблицы: " + blocked.map((r) => r.name).join(", ") };
-  const notReady = rows.filter((r) => !r.ready);
+  const notReady = toApply.filter((r) => !r.ready);
   if (notReady.length) return { ok: false, error: "Нет галочки у: " + notReady.map((r) => r.name).join(", ") };
-  // экран админа мог устареть: ход запускаем только для тех номеров ходов, которые он видел
+  // экран админа мог устареть: ход запускаем только для тех номеров ходов и того списка заморозки, которые он видел
   if (turnsSeen && rows.some((r) => turnsSeen[r.id] !== undefined && Number(turnsSeen[r.id]) !== r.nextTurn)) return { ok: false, error: "Цифры изменились, пока окно было открыто. Обновите вкладку и проверьте ещё раз." };
+  if (Array.isArray(freezeSeen) && [...freezeSeen].map(String).sort().join() !== toFreeze.map((r) => r.id).sort().join()) return { ok: false, error: "Список заморозки изменился, пока окно было открыто. Обновите вкладку и проверьте ещё раз." };
   const batch = new Date().toISOString();
-  await env.DB.batch(rows.map((r) => env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created) VALUES (?1, ?2, ?3, 'pending', ?1)").bind(batch, r.id, r.nextTurn)));
-  return { ok: true, batch, count: rows.length };
+  const stmts = toApply.map((r) => env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created, had_order, misses_before) VALUES (?1, ?2, ?3, 'pending', ?1, ?4, ?5)")
+    .bind(batch, r.id, r.nextTurn, r.orders ? 1 : 0, r.misses));
+  for (const r of toFreeze) {
+    stmts.push(env.DB.prepare("INSERT INTO turn_jobs (batch, state_id, expected_turn, status, created, finished, kind, had_order, misses_before) VALUES (?1, ?2, ?3, 'done', ?1, ?1, 'freeze', 0, ?4)")
+      .bind(batch, r.id, r.nextTurn, r.misses));
+    stmts.push(freezeStmt(env, r.id, true, r.turn, r.misses + 1, batch));
+  }
+  await env.DB.batch(stmts);
+  return { ok: true, batch, count: toApply.length, frozen: toFreeze.map((r) => r.name) };
 }
 
 async function adminTurnRetry(env, jobId) {
@@ -1098,7 +1140,11 @@ async function runTurnJob(env, job) {
     else if (d.code === "already" && Number(d.turn) === job.expected_turn) error = "ход уже был применён раньше";
     else { status = "error"; error = d.error || "ошибка Движка"; }
   } catch (e) { status = "error"; error = String(e && e.message || e); }
-  await env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, backup=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), backup, new Date().toISOString(), job.id).run();
+  const now = new Date().toISOString();
+  const stmts = [env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, backup=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), backup, now, job.id)];
+  // пропуски приказов считаются от значения на момент «Нового хода»: повтор задания не посчитает пропуск дважды
+  if (status === "done") stmts.push(missesStmt(env, job.state_id, job.had_order ? 0 : (job.misses_before || 0) + 1, now));
+  await env.DB.batch(stmts);
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
 }
 
@@ -1159,10 +1205,87 @@ async function runRestoreJob(env, job) {
   } catch (e) { status = "error"; error = String(e && e.message || e); }
   const stmts = [env.DB.prepare("UPDATE turn_jobs SET status=?1, error=?2, safety=?3, finished=?4 WHERE id=?5").bind(status, error.slice(0, 500), safety, new Date().toISOString(), job.id)];
   if (status === "done") {
+    // пропуски приказов — как до откаченного хода (до того, как задание хода станет «undone»)
+    stmts.push(env.DB.prepare(`UPDATE state_orders SET misses = COALESCE((SELECT misses_before FROM turn_jobs WHERE kind='apply' AND status='done' AND state_id=?1 AND expected_turn=?2
+        ORDER BY id DESC LIMIT 1), misses) WHERE state_id=?1`).bind(job.state_id, job.expected_turn));
     stmts.push(env.DB.prepare("UPDATE turn_jobs SET status='undone' WHERE kind='apply' AND status='done' AND state_id=? AND expected_turn=?").bind(job.state_id, job.expected_turn));
     // галочка «заполнено» стояла на откаченный ход — после отката данные надо проверить заново
     stmts.push(env.DB.prepare("UPDATE turn_marks SET ready=0 WHERE state_id=?").bind(job.state_id));
   }
   await env.DB.batch(stmts);
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
+}
+
+/* ============================================================
+ * ЗАМОРОЗКА
+ * Приказы игроки пишут в ВК; админ отмечает на вкладке «Ход» галочку «приказ есть» (или записывает приказ
+ * через «Превью»). Каждый применённый ход без приказа — пропуск, приказ обнуляет счёт. Если и FREEZE_AFTER-й
+ * ход подряд без приказа, «Новый ход» вместо хода замораживает государство: оно стоит на своём ходу,
+ * «Новый ход» его пропускает, на карте оно отмечено. Разморозить (и заморозить вручную) может админ.
+ * Кризисы и счёт пропусков видят только правитель государства и администраторы (action private);
+ * в публичные данные попадает лишь сам факт заморозки.
+ * ============================================================ */
+const FREEZE_AFTER = 3;
+
+let ordersReady = false;
+async function ensureOrders(env) {
+  if (ordersReady) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS state_orders (state_id TEXT PRIMARY KEY, misses INTEGER NOT NULL DEFAULT 0,
+    frozen INTEGER NOT NULL DEFAULT 0, frozen_turn INTEGER NOT NULL DEFAULT 0, frozen_at TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL DEFAULT '')`).run();
+  ordersReady = true;
+}
+
+async function ordersById(env) {
+  await ensureOrders(env);
+  const { results } = await env.DB.prepare("SELECT * FROM state_orders").all();
+  return new Map(results.map((r) => [r.state_id, r]));
+}
+
+const missesStmt = (env, stateId, misses, now) => env.DB.prepare(
+  "INSERT INTO state_orders (state_id, misses, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET misses=?2, updated=?3").bind(stateId, misses, now);
+
+// Заморозка (с номером хода, на котором государство остановилось) или разморозка — со сбросом счёта пропусков.
+const freezeStmt = (env, stateId, frozen, turn, misses, now) => env.DB.prepare(
+  `INSERT INTO state_orders (state_id, misses, frozen, frozen_turn, frozen_at, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+   ON CONFLICT(state_id) DO UPDATE SET misses=?2, frozen=?3, frozen_turn=?4, frozen_at=?5, updated=?5`)
+  .bind(stateId, misses, frozen ? 1 : 0, frozen ? Number(turn) || 0 : 0, now);
+
+async function clearOrders(env, stateId) {
+  await ensureOrders(env);
+  await env.DB.prepare("DELETE FROM state_orders WHERE state_id = ?").bind(stateId).run();
+}
+
+async function adminFreeze(env, ctx, stateId, frozen) {
+  stateId = String(stateId || "");
+  await ensureTurnTables(env);
+  const { rows, busy } = await turnRows(env, ctx);
+  const r = rows.find((x) => x.id === stateId);
+  if (!r) return { ok: false, error: "Государство не найдено или скрыто." };
+  if (busy) return { ok: false, error: "Сейчас идёт ход или откат, дождитесь конца." };
+  if (r.frozen === frozen) return { ok: true };
+  // галочки, поставленные до заморозки, к ходу после разморозки не относятся
+  await env.DB.batch([freezeStmt(env, stateId, frozen, r.turn, frozen ? r.misses : 0, new Date().toISOString()),
+    env.DB.prepare("UPDATE turn_marks SET ready=0, orders=0 WHERE state_id=?").bind(stateId)]);
+  return { ok: true };
+}
+
+// Публичный ответ + отметка заморозки (номер хода, на котором государство остановилось).
+async function withFreeze(env, payload) {
+  const orders = await ordersById(env).catch(() => new Map());
+  return { ...payload, states: payload.states.map((s) => {
+    const o = orders.get(s.id);
+    return { ...s, frozen: o && o.frozen ? o.frozen_turn : null };
+  }) };
+}
+
+// То, что видно только правителю и администраторам: кризисы и счёт ходов без приказа.
+// Админ получает все государства, игрок — только своё.
+async function privatePayload(env, ctx, token) {
+  const t = await readToken(env, token);
+  const [snap, orders] = await Promise.all([getSnapshot(env, ctx), ordersById(env)]);
+  const states = snap.states.filter((s) => t.role === "admin" || s.id === t.stateId).map((s) => {
+    const o = orders.get(s.id) || { misses: 0, frozen: 0 };
+    return { id: s.id, crises: (s.ledger && s.ledger.crises) || [], misses: o.misses, frozen: !!o.frozen, freezeAfter: FREEZE_AFTER };
+  });
+  return { ok: true, states };
 }

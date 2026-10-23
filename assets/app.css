@@ -419,3 +419,13 @@ button { font: inherit; color: inherit; }
 .hist__state-block h3 { margin: 0 0 4px; font: 700 17px/1.2 var(--serif); display: flex; align-items: center; gap: 8px; }
 .hist__undone { color: var(--gold-soft); text-decoration: line-through; }
 #statsDialog .login__actions { flex-wrap: wrap; }
+
+/* ---------- заморозка и скрытые кризисы ---------- */
+.roster__name { flex: 1 1 auto; min-width: 0; }
+.roster__flag { flex: none; font-size: 12px; line-height: 1.2; padding: 1px 6px; border: 1px solid var(--rule); color: var(--gold-soft); }
+.roster__flag--crisis { border-color: var(--deficit); color: var(--deficit); }
+.roster__list button.is-frozen .roster__name, .roster__list button.is-frozen .swatch { opacity: 0.55; }
+.frozen { border: 1px solid var(--rule); background: var(--banner); color: var(--gold); padding: 8px 12px; margin-top: 16px; font-size: 15px; }
+.crisis__note { margin-top: 4px; font-size: 12px; color: var(--gold-soft); }
+.turn__frozen td { color: var(--gold-soft); }
+#previewDialog .login__actions { flex-wrap: wrap; gap: 8px 20px; }

@@ -41,10 +41,12 @@ CREATE TABLE IF NOT EXISTS settings (
 INSERT OR IGNORE INTO settings (key, value) VALUES ('season', 'Средневековье'), ('start_year', '1200');
 
 -- Вкладка «Ход»: галочка «данные хода заполнены» на конкретный номер хода (после хода она сама перестаёт действовать)
+-- и галочка «приказ есть» (приказы приходят в ВК, отмечает админ)
 CREATE TABLE IF NOT EXISTS turn_marks (
   state_id TEXT PRIMARY KEY,
   turn     INTEGER NOT NULL,
   ready    INTEGER NOT NULL DEFAULT 0,
+  orders   INTEGER NOT NULL DEFAULT 0,
   updated  TEXT NOT NULL
 );
 
@@ -60,8 +62,10 @@ CREATE TABLE IF NOT EXISTS turn_jobs (
   created       TEXT NOT NULL,
   started       TEXT NOT NULL DEFAULT '',
   finished      TEXT NOT NULL DEFAULT '',
-  kind          TEXT NOT NULL DEFAULT 'apply',     -- apply — ход, restore — откат хода из копии backup
-  safety        TEXT NOT NULL DEFAULT ''           -- копия таблицы, снятая перед откатом
+  kind          TEXT NOT NULL DEFAULT 'apply',     -- apply — ход, restore — откат хода из копии backup, freeze — заморожено вместо хода
+  safety        TEXT NOT NULL DEFAULT '',          -- копия таблицы, снятая перед откатом
+  had_order     INTEGER NOT NULL DEFAULT 1,        -- был ли приказ на этот ход
+  misses_before INTEGER NOT NULL DEFAULT 0         -- ходов подряд без приказа до этого хода (для отката)
 );
 CREATE INDEX IF NOT EXISTS turn_jobs_status ON turn_jobs (status);
 
@@ -87,3 +91,13 @@ CREATE TABLE IF NOT EXISTS stat_edits (
   undone  TEXT NOT NULL DEFAULT ''      -- когда правку откатили
 );
 CREATE INDEX IF NOT EXISTS stat_edits_state ON stat_edits (state_id, id);
+
+-- Учёт приказов: ходов подряд без приказа и заморозка (после 3 пропусков подряд «Новый ход» замораживает государство)
+CREATE TABLE IF NOT EXISTS state_orders (
+  state_id    TEXT PRIMARY KEY,
+  misses      INTEGER NOT NULL DEFAULT 0,
+  frozen      INTEGER NOT NULL DEFAULT 0,
+  frozen_turn INTEGER NOT NULL DEFAULT 0,   -- ход в таблице, на котором государство остановилось
+  frozen_at   TEXT NOT NULL DEFAULT '',
+  updated     TEXT NOT NULL DEFAULT ''
+);
