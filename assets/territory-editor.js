@@ -263,7 +263,8 @@
   /**
    * opts: { map, nativeZ, states: [{id, name, color}], loadGrid(): Promise<grid|null>, borders: GeoJSON,
    *         loadRegions(stateId): Promise<string[]>, save({grid, geometries, provinces}): Promise, onClose(saved),
-   *         mountains: [[x, y, size, kind]] из map.json — дороги их обходят, lakes — кольца озёр (дороги не идут по воде) }
+   *         mountains: [[x, y, size, kind]] из map.json — дороги их обходят, lakes — кольца озёр (дороги не идут по воде),
+   *         info(stateId) -> {regions, style} — регионы с постройками и стиль построек для режима «Дороги и постройки» }
    */
   async function open(opts) {
     const { map, nativeZ } = opts;
@@ -287,6 +288,8 @@
     const provNames = new Map();
     // города: {stateId: {провинция: [x, y]}} в пикселях карты — куда админ поставил город провинции
     const cities = {};
+    // ручные правки поселений: {stateId: {towns: {провинция: {v: {№ деревни: [x, y]}, b: {"Порт#0": [x, y]}}}, roads: {links, vroads}}}
+    const manual = {};
     const saved = await opts.loadGrid().catch(() => null);
     if (saved && saved.w === W && saved.h === H && Array.isArray(saved.rle)) {
       const old = unrle(saved.rle, W * H);
@@ -298,6 +301,7 @@
         Object.entries(saved.prov.names || {}).forEach(([id, names]) => { if (owners.includes(id) && Array.isArray(names)) provNames.set(id, names.map(String)); });
       }
       Object.entries(saved.cities || {}).forEach(([id, c]) => { if (owners.includes(id) && c && typeof c === "object") cities[id] = { ...c }; });
+      Object.entries(saved.manual || {}).forEach(([id, m]) => { if (owners.includes(id) && m && typeof m === "object") manual[id] = JSON.parse(JSON.stringify(m)); });
     } else if (opts.borders && opts.borders.features.length) {
       // сетки ещё нет — переводим существующие границы в клетки
       const c = document.createElement("canvas"); c.width = W; c.height = H;
@@ -395,7 +399,7 @@
     }
     // Режим «Города»: значок на месте города каждой провинции (золотой — поставлен админом)
     const cityLayer = L.layerGroup();
-    const settleOpts = () => ({ owner, prov, land, W, H, owners, names: (id) => provNames.get(id), cities, mountains: opts.mountains || [], lakes: opts.lakes || [] });
+    const settleOpts = () => ({ owner, prov, land, W, H, owners, names: (id) => provNames.get(id), cities, manual, mountains: opts.mountains || [], lakes: opts.lakes || [] });
     function drawCities() {
       cityLayer.clearLayers();
       if (!window.VPISettlements) return;
@@ -427,6 +431,235 @@
     }
     map.on("click", placeCity);
 
+    /* Режим «Дороги и постройки»: города, деревни и постройки — настоящие значки, их можно перетаскивать;
+     * дорогу можно выбрать щелчком и двигать её точки, удалить или нарисовать новую. Правки хранятся
+     * в сетке (grid.manual) и переживают следующее сохранение кисти. Дороги государства, которые тронули
+     * руками, дальше не прокладываются заново, пока их не сбросить. */
+    const settleLayer = L.layerGroup(), roadLayer = L.layerGroup(), handleLayer = L.layerGroup();
+    const settleBar = ui.querySelector("#brushSettle");
+    let res = null, costs = null, picked = null, drawingRoad = null;
+    const S = () => window.VPISettlements;
+    const cellIdx = (x, y) => { const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL); return cx >= 0 && cy >= 0 && cx < W && cy < H ? cy * W + cx : -1; };
+    const provAt = (x, y) => {
+      const i = cellIdx(x, y), o = i >= 0 ? owner[i] : 0;
+      if (!o) return null;
+      const id = owners[o - 1], names = provNames.get(id) || ["Столица"];
+      return { id, name: names[Math.min(names.length, provOf(prov, i)) - 1] };
+    };
+    const wet = (x, y) => { const i = cellIdx(x, y); return i < 0 || !costs[i]; };
+    // доля точек отрезков дороги, попавших в воду (по шагу в полклетки)
+    const wetShare = (line) => {
+      let n = 0, w = 0;
+      for (let k = 1; k < line.length; k++) {
+        const [ax, ay] = line[k - 1], [bx, by] = line[k], steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (CELL / 2)));
+        for (let s2 = 0; s2 <= steps; s2++) { n++; if (wet(ax + ((bx - ax) * s2) / steps, ay + ((by - ay) * s2) / steps)) w++; }
+      }
+      return n ? w / n : 0;
+    };
+    const mTown = (id, name) => { const m = (manual[id] = manual[id] || {}); m.towns = m.towns || {}; return (m.towns[name] = m.towns[name] || {}); };
+    // первая ручная правка дорог государства «замораживает» его текущие дороги: дальше меняем копию
+    function frozen(id) {
+      const m = (manual[id] = manual[id] || {});
+      if (!m.roads) {
+        const r = res[id] || { links: [], towns: [] };
+        m.roads = { links: r.links.map((l) => l.map((q) => q.slice())), vroads: Object.fromEntries(r.towns.map((t) => [t.name, t.vroads.map((l) => l.map((q) => q.slice()))])) };
+      }
+      return m.roads;
+    }
+    function recompute() {
+      res = S().compute(settleOpts());
+    }
+    const iconCache = new WeakMap();
+    const iconURL = (spr) => { let u = iconCache.get(spr); if (!u) { u = spr.c.toDataURL(); iconCache.set(spr, u); } return u; };
+    function iconFor(it) {
+      // тот же размер, что на карте (assets/settlements.js, drawIcons): в масштабе карты, но не крупнее своего
+      const k = Math.pow(2, map.getZoom() - nativeZ);
+      let w = Math.min(it.w * k, it.w);
+      if (it.min) w = Math.max(w, it.min);
+      const sc = w / it.spr.nw;
+      return L.icon({ iconUrl: iconURL(it.spr), iconSize: [it.spr.w * sc, it.spr.h * sc], iconAnchor: [it.spr.ax * sc, it.spr.ay * sc], className: "settle-icon" });
+    }
+    const markers = [];
+    function drawSettle() {
+      settleLayer.clearLayers(); roadLayer.clearLayers(); markers.length = 0;
+      if (!res) return;
+      for (const st of opts.states) {
+        const r = res[st.id];
+        if (!r || !r.towns.length) continue;
+        const inf = (opts.info && opts.info(st.id)) || {};
+        // дороги: link — между городами, v — к деревне (видна, только если деревня показана на карте)
+        r.links.forEach((line, i) => addRoad(line, { id: st.id, kind: "link", i }));
+        const regions = inf.regions || [];
+        r.towns.forEach((t) => {
+          const reg = regions.find((x) => x.name === t.name) || regions[t.i] || null;
+          const nv = reg ? Math.min(t.villages.length, S().villagesFor(Number(reg.population) || 0)) : Math.min(t.villages.length, 2);
+          t.vroads.forEach((line, v) => { if (v < nv) addRoad(line, { id: st.id, kind: "v", town: t.name, v }); });
+        });
+        const prep = S().prepare({ towns: r.towns, links: [] }, regions, st.color, inf.style);
+        if (!prep) continue;
+        for (const it of prep.items) {
+          const mk = L.marker(toLL(it.x, it.y), { icon: iconFor(it), draggable: true, zIndexOffset: it.kind === 0 ? 0 : it.kind === 1 ? 100 : 200, autoPan: true })
+            .bindTooltip(escHtml(it.kind === 0 ? it.ref.town : it.kind === 1 ? `Деревня · ${it.ref.town}` : `${it.tip.name} · ${it.ref.town}`), { direction: "top", offset: [0, -10] });
+          mk.on("dragend", () => dropItem(st.id, it, mk));
+          mk.addTo(settleLayer);
+          markers.push([mk, it]);
+        }
+      }
+      if (picked) showHandles();
+    }
+    function addRoad(line, ref) {
+      if (!line || line.length < 2) return;
+      const lls = line.map(([x, y]) => toLL(x, y));
+      const sel = picked && sameRoad(picked, ref);
+      L.polyline(lls, { color: "#180f08", weight: 7, opacity: 0.7, interactive: false }).addTo(roadLayer);
+      const pl = L.polyline(lls, { color: sel ? "#FF6A3D" : "#C2A262", weight: 4, opacity: 1, bubblingMouseEvents: false }).addTo(roadLayer);
+      pl.on("click", () => { if (drawingRoad) return; picked = ref; drawSettle(); roadMsg(); });
+      pl.bindTooltip(ref.kind === "link" ? "Дорога между городами" : `Дорога к деревне · ${ref.town}`, { sticky: true });
+    }
+    const sameRoad = (a, b) => a.id === b.id && a.kind === b.kind && (a.kind === "link" ? a.i === b.i : a.town === b.town && a.v === b.v);
+    function roadRef(ref, roads) {
+      if (ref.kind === "link") return roads.links[ref.i];
+      const list = roads.vroads[ref.town] || (roads.vroads[ref.town] = []);
+      return list[ref.v];
+    }
+    function setRoad(ref, line) {
+      const roads = frozen(ref.id);
+      if (ref.kind === "link") { if (line) roads.links[ref.i] = line; else roads.links.splice(ref.i, 1); }
+      else { const list = roads.vroads[ref.town] || (roads.vroads[ref.town] = []); list[ref.v] = line || []; }
+      dirty = true;
+    }
+    function currentLine() {
+      if (!picked || !res[picked.id]) return null;
+      if (manual[picked.id] && manual[picked.id].roads) return roadRef(picked, manual[picked.id].roads);
+      const r = res[picked.id];
+      if (picked.kind === "link") return r.links[picked.i];
+      const t = r.towns.find((x) => x.name === picked.town);
+      return t && t.vroads[picked.v];
+    }
+    // точки выбранной дороги: большие — двигать (правая кнопка — убрать точку), маленькие посередине — добавить точку
+    function showHandles() {
+      handleLayer.clearLayers();
+      const line = currentLine();
+      if (!line || line.length < 2) { picked = null; return; }
+      const commit = (next) => { setRoad(picked, next); recompute(); drawSettle(); roadMsg(); };
+      line.forEach((pt, k) => {
+        const h = L.marker(toLL(pt[0], pt[1]), { draggable: true, icon: L.divIcon({ className: "road-handle", iconSize: [14, 14] }), zIndexOffset: 1000 }).addTo(handleLayer);
+        h.on("dragend", () => { const p = map.project(h.getLatLng(), nativeZ); const next = line.map((q) => q.slice()); next[k] = [Math.round(p.x), Math.round(p.y)]; commit(next); });
+        h.on("contextmenu", (e) => { L.DomEvent.preventDefault(e.originalEvent || e); if (line.length <= 2) return; commit(line.filter((_, j) => j !== k).map((q) => q.slice())); });
+      });
+      for (let k = 1; k < line.length; k++) {
+        const mx = (line[k - 1][0] + line[k][0]) / 2, my = (line[k - 1][1] + line[k][1]) / 2;
+        const h = L.marker(toLL(mx, my), { draggable: true, icon: L.divIcon({ className: "road-handle road-handle--mid", iconSize: [10, 10] }), zIndexOffset: 900 }).addTo(handleLayer);
+        h.on("dragend", () => { const p = map.project(h.getLatLng(), nativeZ); const next = line.map((q) => q.slice()); next.splice(k, 0, [Math.round(p.x), Math.round(p.y)]); commit(next); });
+      }
+    }
+    function roadMsg() {
+      if (!picked) { msg("Перетаскивайте города, деревни и постройки. Щёлкните по дороге, чтобы править её точки, или нарисуйте новую."); return; }
+      const line = currentLine(), w = line ? wetShare(line) : 0;
+      msg(w > 0.02
+        ? `Дорога выбрана. Часть её (${Math.round(w * 100)}%) идёт по воде — перетащите точки на сушу. Маленькие точки посередине добавляют изгиб, правая кнопка мыши по точке убирает её.`
+        : "Дорога выбрана: тащите большие точки, маленькие посередине добавляют изгиб, правая кнопка мыши по точке убирает её. «Удалить дорогу» — убрать совсем.", w > 0.02);
+    }
+    // значок отпустили: проверяем место, запоминаем правку, раскладываем заново
+    function dropItem(id, it, mk) {
+      const p = map.project(mk.getLatLng(), nativeZ), x = Math.round(p.x), y = Math.round(p.y);
+      const back = (t) => { mk.setLatLng(toLL(it.x, it.y)); msg(t, true); };
+      if (wet(x, y)) return back("Сюда нельзя: это вода.");
+      const here = provAt(x, y);
+      if (it.kind === 0 || it.kind === 1) {
+        if (!here || here.id !== id || here.name !== it.ref.town) return back(`${it.kind === 0 ? "Город" : "Деревня"} остаётся в своей провинции «${it.ref.town}».`);
+        if (it.kind === 0) (cities[id] = cities[id] || {})[it.ref.town] = [x, y];
+        else {
+          const t = mTown(id, it.ref.town); (t.v = t.v || {})[it.ref.v] = [x, y];
+          // если дороги государства правлены руками — тянем за деревней конец её дороги
+          const m = manual[id];
+          const vr = m && m.roads && m.roads.vroads[it.ref.town] && m.roads.vroads[it.ref.town][it.ref.v];
+          if (vr && vr.length >= 2) vr[0] = [x, y];
+        }
+      } else {
+        const t = mTown(id, it.ref.town); (t.b = t.b || {})[it.ref.b] = [x, y];
+      }
+      dirty = true;
+      recompute(); drawSettle();
+      const fixed = manual[id] && manual[id].roads;
+      msg(it.kind === 2 ? "Постройка передвинута." : fixed ? "Передвинуто. Дороги этого государства правлены вручную, поэтому сами не перестроились — поправьте их или «Сбросить правки»." : "Передвинуто, дороги проложены заново.");
+    }
+    function refreshIcons() { for (const [mk, it] of markers) mk.setIcon(iconFor(it)); }
+    async function enterSettle() {
+      msg("Читаю регионы государств…");
+      await Promise.all(owners.filter((id, i) => owner.includes(i + 1)).map(loadNames));
+      if (mode !== "settle") return;
+      msg("Раскладываю города, деревни и дороги…");
+      await new Promise((r) => setTimeout(r, 30));
+      costs = S().costGrid(settleOpts());
+      recompute();
+      overlay.setOpacity(0.35);
+      roadLayer.addTo(map); settleLayer.addTo(map); handleLayer.addTo(map);
+      drawSettle();
+      map.on("zoomend", refreshIcons);
+      roadMsg();
+    }
+    function leaveSettle() {
+      if (drawingRoad) { drawingRoad.layer.remove(); drawingRoad = null; }
+      picked = null;
+      roadLayer.remove(); settleLayer.remove(); handleLayer.remove(); handleLayer.clearLayers();
+      map.off("zoomend", refreshIcons);
+      overlay.setOpacity(1);
+    }
+    function settleClick(e) {
+      if (mode !== "settle") return;
+      const p = map.project(e.latlng, nativeZ), pt = [Math.round(p.x), Math.round(p.y)];
+      if (drawingRoad) {
+        drawingRoad.pts.push(pt);
+        drawingRoad.layer.setLatLngs(drawingRoad.pts.map(([x, y]) => toLL(x, y)));
+        msg(wet(pt[0], pt[1]) ? "Эта точка в воде — дорога пройдёт по морю. Щёлкните на суше." : `Точек: ${drawingRoad.pts.length}. Щёлкайте дальше, затем «Готово».`, wet(pt[0], pt[1]));
+        return;
+      }
+      if (picked) { picked = null; handleLayer.clearLayers(); drawSettle(); roadMsg(); }
+    }
+    map.on("click", settleClick);
+    const newBtn = ui.querySelector("#settleNew");
+    newBtn.onclick = () => {
+      if (!res) return;
+      if (!drawingRoad) {
+        picked = null; handleLayer.clearLayers(); drawSettle();
+        drawingRoad = { pts: [], layer: L.polyline([], { color: "#FF6A3D", weight: 4, dashArray: "6 6", interactive: false }).addTo(map) };
+        newBtn.textContent = "Готово";
+        msg("Щёлкайте по карте точки новой дороги (лучше от города к городу), затем «Готово».");
+        return;
+      }
+      const pts = drawingRoad.pts;
+      drawingRoad.layer.remove(); drawingRoad = null;
+      newBtn.textContent = "Новая дорога";
+      if (pts.length < 2) { roadMsg(); return; }
+      // дорога принадлежит государству, в чьей провинции она начинается (иначе — выбранному в списке)
+      const here = provAt(pts[0][0], pts[0][1]) || provAt(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+      const id = here ? here.id : owners[current - 1];
+      if (!res[id] || !res[id].towns.length) { msg("Дорогу можно провести только у государства с городами.", true); return; }
+      const roads = frozen(id);
+      roads.links.push(pts);
+      dirty = true;
+      picked = { id, kind: "link", i: roads.links.length - 1 };
+      recompute(); drawSettle(); roadMsg();
+    };
+    ui.querySelector("#settleDelete").onclick = () => {
+      if (!picked) { msg("Сначала щёлкните по дороге.", true); return; }
+      setRoad(picked, null);
+      picked = null; handleLayer.clearLayers();
+      recompute(); drawSettle();
+      msg("Дорога удалена.");
+    };
+    ui.querySelector("#settleReset").onclick = () => {
+      const id = owners[current - 1], st = opts.states[current - 1];
+      if (!manual[id]) { msg(`У «${st ? st.name : id}» нет ручных правок.`); return; }
+      if (!confirm(`Сбросить ручные правки дорог, деревень и построек государства «${st ? st.name : id}»?`)) return;
+      delete manual[id];
+      dirty = true;
+      picked = null; handleLayer.clearLayers();
+      recompute(); drawSettle();
+      msg("Правки сброшены: дороги, деревни и постройки разложены автоматически.");
+    };
+
     sel.onchange = () => { current = Number(sel.value); if (mode === "prov") enterProvinces(); };
     provSel.onchange = () => {
       if (provSel.value !== "new") { currentProv = Number(provSel.value); return; }
@@ -444,12 +677,15 @@
       const was = mode;
       mode = m;
       provField.hidden = m !== "prov";
+      settleBar.hidden = m !== "settle";
       if (m !== "city") cityLayer.remove();
+      if (was === "settle" && m !== "settle") leaveSettle();
       if (m === "prov") enterProvinces();
       else if (m === "city") { if (was === "prov") repaint(); enterCities(); }
-      else if (was === "prov" || was === "city") { if (was === "prov") repaint(); msg("Выберите государство и красьте сушу. Колесо мыши — масштаб, «Рука» — двигать карту."); }
+      else if (m === "settle") { if (was === "prov") repaint(); if (was !== "settle") enterSettle(); }
+      else if (was === "prov" || was === "city" || was === "settle") { if (was === "prov") repaint(); msg("Выберите государство и красьте сушу. Колесо мыши — масштаб, «Рука» — двигать карту."); }
       ui.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
-      const free = m === "pan" || m === "city";
+      const free = m === "pan" || m === "city" || m === "settle";
       if (free) map.dragging.enable(); else map.dragging.disable();
       map.getContainer().style.cursor = m === "pan" ? "" : "crosshair";
       map.getContainer().style.touchAction = free ? "" : "none";
@@ -494,7 +730,7 @@
       last = c;
     }
     const el = map.getContainer();
-    const down = (e) => { if (mode === "pan" || mode === "city" || e.button > 0) return; if (!current && mode === "brush") return; drawing = true; last = null; strokeTo(cellAt(e)); e.preventDefault(); };
+    const down = (e) => { if (mode === "pan" || mode === "city" || mode === "settle" || e.button > 0) return; if (!current && mode === "brush") return; drawing = true; last = null; strokeTo(cellAt(e)); e.preventDefault(); };
     const move = (e) => { if (drawing) strokeTo(cellAt(e)); };
     const up = () => { drawing = false; last = null; };
     el.addEventListener("pointerdown", down);
@@ -506,6 +742,9 @@
       el.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       map.off("click", placeCity);
+      map.off("click", settleClick);
+      if (mode === "settle") leaveSettle();
+      settleBar.hidden = true;
       cityLayer.remove();
       overlay.remove();
       map.dragging.enable();
@@ -546,7 +785,7 @@
           });
         }
         msg("Сохраняю…");
-        const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) }, cities };
+        const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) }, cities, manual };
         await opts.save({ grid, geometries, provinces });
         dirty = false;
         close(true);

@@ -46,7 +46,13 @@
       <button type="button" class="btn btn--ghost" data-mode="erase" aria-pressed="false">Ластик</button>
       <button type="button" class="btn btn--ghost" data-mode="prov" aria-pressed="false">Провинции</button>
       <button type="button" class="btn btn--ghost" data-mode="city" aria-pressed="false">Города</button>
+      <button type="button" class="btn btn--ghost" data-mode="settle" aria-pressed="false">Дороги и постройки</button>
       <button type="button" class="btn btn--ghost" data-mode="pan" aria-pressed="false">Рука</button>
+    </div>
+    <div class="brush__field" id="brushSettle" hidden>
+      <button type="button" class="btn btn--ghost" id="settleNew">Новая дорога</button>
+      <button type="button" class="btn btn--ghost" id="settleDelete">Удалить дорогу</button>
+      <button type="button" class="btn btn--ghost" id="settleReset">Сбросить правки</button>
     </div>
     <label class="brush__field" id="brushProvField" hidden>Провинция <select id="brushProv"></select></label>
     <label class="brush__field">Размер <input id="brushSize" type="range" min="1" max="40" value="6"> <output id="brushSizeOut">6</output></label>

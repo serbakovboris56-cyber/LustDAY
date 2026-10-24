@@ -115,9 +115,9 @@
     return out.reverse();
   }
 
-  // Цена клеток, провинции и места городов — общее для расчёта и для режима «Города» в кисти.
-  function layout(opts) {
-    const { owner, prov, land, W, H, owners, names, cities = {}, mountains = [], lakes = [] } = opts;
+  // Цена клеток для дорог: 0 — вода (море и озёра), дальше чем дороже, тем хуже для дороги.
+  function costGrid(opts) {
+    const { land, W, H, mountains = [], lakes = [] } = opts;
     const N = W * H;
     // цена клеток: вода не проходима, берег (клетка наполовину в воде) и холмы дороже, горы — намного дороже
     const cost = new Float32Array(N);
@@ -148,6 +148,14 @@
         if (cost[i] && (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 <= r * r && cost[i] < v) cost[i] = v;
       }
     }
+    return cost;
+  }
+
+  // Цена клеток, провинции и места городов — общее для расчёта и для режимов «Города» и «Дороги и постройки» в кисти.
+  function layout(opts) {
+    const { owner, prov, W, H, owners, names, cities = {} } = opts;
+    const N = W * H;
+    const cost = costGrid(opts);
 
     // провинции: ключ — номер государства × 256 + номер провинции
     const nameLists = owners.map((id) => { const n = names(id); return n && n.length ? n : ["Столица"]; });
@@ -207,6 +215,14 @@
     const { land, W, H, owners } = opts;
     const N = W * H;
     const { cost, P, keyGrid, inner, px, dist2 } = layout(opts);
+    // ручные правки админа: {stateId: {towns: {провинция: {v: {№: [x, y]}, b: {постройка: [x, y]}}}, roads: {links, vroads}}}
+    const manual = opts.manual || {};
+    const manualTown = (p) => manual[p.id] && manual[p.id].towns && manual[p.id].towns[p.name];
+    const cellOf = (pt) => {
+      if (!Array.isArray(pt)) return -1;
+      const x = Math.floor(pt[0] / CELL), y = Math.floor(pt[1] / CELL);
+      return x >= 0 && y >= 0 && x < W && y < H ? y * W + x : -1;
+    };
 
     const road = new Uint8Array(N);
     const mark = (path) => { for (const c of path) road[c] = 1; };
@@ -269,6 +285,12 @@
         if (bd < 144) break;           // ближе ~12 клеток к соседям — провинция уже заполнена
         pts.push(best); villages.push(best);
       }
+      // деревни, которые админ передвинул сам (на суше своей провинции); дороги к ним проложатся заново
+      const movedV = (manualTown(p) || {}).v || {};
+      for (const [j, pt] of Object.entries(movedV)) {
+        const c = cellOf(pt);
+        if (c >= 0 && Number(j) < villages.length && keyGrid[c] === p.key && cost[c]) villages[Number(j)] = c;
+      }
       const vroads = [];
       villages.forEach((v, j) => {
         // деревня присоединяется к ближайшему из уже соединённых: город или деревни раньше неё
@@ -318,15 +340,23 @@
         name: p.name, i: p.n - 1, x: px(p.city)[0], y: px(p.city)[1], set: p.set,
         villages: villages.map(px), vroads, spots: spots.map(px), fields: fields.map(px),
         coast: coast >= 0 && cd < 30 * 30 ? px(coast) : null,
+        place: { ...((manualTown(p) || {}).b || {}) },
       });
     }
-    for (const id of owners) out[id].towns.sort((a, b) => a.i - b.i);
+    for (const id of owners) {
+      out[id].towns.sort((a, b) => a.i - b.i);
+      // дороги, которые админ правил руками, заменяют проложенные автоматически
+      const r = manual[id] && manual[id].roads;
+      if (!r) continue;
+      out[id].links = (r.links || []).map((l) => l.map((q) => q.slice()));
+      for (const t of out[id].towns) if (r.vroads && Array.isArray(r.vroads[t.name])) t.vroads = r.vroads[t.name].map((l) => l.map((q) => q.slice()));
+    }
     return out;
   }
 
   /* ---------------- значки ---------------- */
   // Рисунки городов, деревень и зданий — в assets/buildings.js (VPIBuildings), в стиле государства.
-  const CITY_MAP = [140, 210, 280, 360];        // ширина значка города в пикселях карты (горы на карте — 30–60)
+  const CITY_MAP = [90, 105, 120, 140];         // ширина значка города в пикселях карты: чуть крупнее деревни (80)
   const B_MAP = 2.6, VILLAGE_MAP = 80;          // постройки (на единицу рисунка) и деревни в пикселях карты
 
   // «Ферма x3», «3 фермы», «Ферма (3)», «Ферма ×3 шт.» → { name, n }
@@ -366,6 +396,37 @@
     return { b: [x0, y0, x1, y1], p };
   }
 
+  /* Постройки игрока по местам: сельские — на полях у деревень, порт — на берегу, остальное — вокруг города,
+   * дорогие ближе к городу. Одного здания рисуется не больше трёх штук. Место, куда админ передвинул
+   * постройку (town.place["Порт#0"]), важнее автоматического. Возвращает [{key, name, b, at, tip}]. */
+  function placeBuildings(t, reg, nv) {
+    const VB = window.VPIBuildings;
+    const list = [];
+    for (const raw of (reg && reg.buildings) || []) {
+      const { name, n } = parseBuilding(raw), b = VB.findBuilding(name);
+      const have = list.filter((x) => x.name === name).length;
+      for (let k = 0; k < Math.min(n, 3 - have); k++) list.push({ name, b, key: name + "#" + (have + k) });
+    }
+    list.sort((p, q) => (q.b ? q.b.cost : 0) - (p.b ? p.b.cost : 0));
+    const spots = t.spots.slice(), fields = t.fields.slice(0, nv * 2).concat(t.fields.slice(nv * 2));
+    const place = t.place || {};
+    let coast = t.coast;
+    const out = [];
+    for (const { name, b, key } of list) {
+      let at = Array.isArray(place[key]) ? place[key] : null;
+      if (!at) {
+        const where = placeOf(b);
+        if (where === "coast" && coast) { at = coast; coast = null; }
+        else if (where === "field" && fields.length) at = fields.shift();
+        else if (spots.length) at = spots.shift();
+        else if (fields.length) at = fields.shift();
+      }
+      if (!at) continue;
+      out.push({ key, name, b, at, tip: { name: b ? b.name : name, town: t.name, building: true } });
+    }
+    return out;
+  }
+
   const tierOf = (pop) => (pop >= 150000 ? 3 : pop >= 60000 ? 2 : pop >= 15000 ? 1 : 0);
   const TIER_NAMES = ["Посёлок", "Малый город", "Город", "Большой город"];
   const villagesFor = (pop) => Math.max(1, Math.min(VILLAGE_SLOTS, 1 + Math.floor(pop / 12000)));
@@ -386,37 +447,19 @@
       const pop = reg ? Number(reg.population) || 0 : 0;
       const tier = tierOf(pop), capital = reg ? /столиц/i.test(reg.type || "") : t.i === 0 && data.towns.length > 1;
       const variant = hashStr(t.name) % 3;
-      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 20 + tier * 6,
+      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 20 + tier * 6, ref: { town: t.name },
         tip: { name: t.name, tier: TIER_NAMES[tier], capital, pop, buildings: reg ? reg.buildings || [] : [] } });
       grow(t.x, t.y);
       const nv = reg ? Math.min(t.villages.length, villagesFor(pop)) : Math.min(t.villages.length, 2);
       for (let v = 0; v < nv; v++) {
         const [x, y] = t.villages[v];
-        items.push({ spr: VB.villageSprite((ti + v) % 2, style), x, y, w: VILLAGE_MAP, kind: 1 });
+        items.push({ spr: VB.villageSprite((ti + v) % 2, style), x, y, w: VILLAGE_MAP, kind: 1, ref: { town: t.name, v } });
         grow(x, y);
         if (t.vroads[v] && t.vroads[v].length >= 2) vroads.push(roadItem(t.vroads[v]));
       }
-      // постройки игрока: сельские — на полях у деревень, порт — на берегу, остальное — вокруг города,
-      // дорогие ближе к городу. Одного здания рисуется не больше трёх штук.
-      const list = [];
-      for (const raw of (reg && reg.buildings) || []) {
-        const { name, n } = parseBuilding(raw), b = VB.findBuilding(name);
-        const have = list.filter((x) => x.name === name).length;
-        for (let k = 0; k < Math.min(n, 3 - have); k++) list.push({ name, b });
-      }
-      list.sort((p, q) => (q.b ? q.b.cost : 0) - (p.b ? p.b.cost : 0));
-      const spots = t.spots.slice(), fields = t.fields.slice(0, nv * 2).concat(t.fields.slice(nv * 2));
-      let coast = t.coast;
-      for (const { name, b } of list) {
-        const where = placeOf(b);
-        let at = null;
-        if (where === "coast" && coast) { at = coast; coast = null; }
-        else if (where === "field" && fields.length) at = fields.shift();
-        else if (spots.length) at = spots.shift();
-        else if (fields.length) at = fields.shift();
-        if (!at) break;
+      for (const { b, at, tip, key } of placeBuildings(t, reg, nv)) {
         const spr = (b && VB.buildingSprite(b, style, color)) || VB.genericSprite(style, color);
-        items.push({ spr, x: at[0], y: at[1], w: spr.nw * B_MAP, kind: 2, tip: { name: b ? b.name : name, town: t.name, building: true } });
+        items.push({ spr, x: at[0], y: at[1], w: spr.nw * B_MAP, kind: 2, tip, ref: { town: t.name, b: key } });
         grow(at[0], at[1]);
       }
     });
@@ -487,5 +530,5 @@
     return best && best.tip;
   }
 
-  window.VPISettlements = { compute, cityPoints, prepare, drawRoads, drawIcons, townAt, parseBuilding };
+  window.VPISettlements = { compute, cityPoints, prepare, placeBuildings, costGrid, drawRoads, drawIcons, townAt, parseBuilding, villagesFor, CELL };
 })();

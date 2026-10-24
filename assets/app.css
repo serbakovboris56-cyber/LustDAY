@@ -385,6 +385,10 @@ button { font: inherit; color: inherit; }
 .brush [aria-pressed="true"] { background: var(--gold); color: var(--ink); }
 .brush__msg { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--gold-soft); }
 .brush__msg.is-error { color: var(--deficit); }
+/* режим «Дороги и постройки»: точки выбранной дороги и значки поселений */
+.road-handle { background: #FF6A3D; border: 2px solid #180f08; border-radius: 50%; box-sizing: border-box; cursor: move; }
+.road-handle--mid { background: #F3E3B5; opacity: 0.9; }
+.settle-icon { cursor: move; filter: drop-shadow(0 0 2px rgba(255, 215, 0, 0.55)); }
 @media (max-width: 720px) { .brush { top: 8px; padding: 8px; gap: 8px; } .brush input[type="range"] { width: 90px; } }
 
 /* ---------- правка статистики ---------- */

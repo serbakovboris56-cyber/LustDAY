@@ -964,10 +964,46 @@ function cleanProvinces(p) {
     name: String(t.name || "").slice(0, 60), i: Number.isInteger(t.i) ? t.i : 0, x: Math.round(t.x), y: Math.round(t.y), set: !!t.set,
     villages: pts(t.villages, 12), vroads: lineList(t.vroads, 12, 600), spots: pts(t.spots, 20), fields: pts(t.fields, 30),
     coast: isPt(t.coast) ? t.coast.map(Math.round) : null,
+    place: cleanPlace(t.place, 60),
   }));
   const links = lineList(p.links, 1000, 2000).filter((l) => l.length >= 2);
   if (!lines.length && !towns.length) return null;
   return towns.length ? { lines, labels, towns, links } : { lines, labels };
+}
+
+// {ключ: [x, y]} — не больше max точек, ключи короткие
+function cleanPlace(m, max) {
+  const o = {};
+  if (!m || typeof m !== "object") return o;
+  for (const [k, pt] of Object.entries(m).slice(0, max)) if (Array.isArray(pt) && Number.isFinite(pt[0]) && Number.isFinite(pt[1])) o[String(k).slice(0, 80)] = [Math.round(pt[0]), Math.round(pt[1])];
+  return o;
+}
+
+// Ручные правки поселений из режима «Дороги и постройки» (см. assets/territory-editor.js):
+// {stateId: {towns: {провинция: {v: {№: [x, y]}, b: {"Порт#0": [x, y]}}}, roads: {links: [линии], vroads: {провинция: [линии]}}}}
+function cleanManual(m) {
+  if (!m || typeof m !== "object") return undefined;
+  const isPt = (pt) => Array.isArray(pt) && pt.length === 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]);
+  const line = (l) => (Array.isArray(l) ? l.filter(isPt).slice(0, 2000).map(([x, y]) => [Math.round(x), Math.round(y)]) : []);
+  const out = {};
+  for (const [id, st] of Object.entries(m).slice(0, 200)) {
+    if (!st || typeof st !== "object") continue;
+    const o = {};
+    if (st.towns && typeof st.towns === "object") {
+      o.towns = {};
+      for (const [name, t] of Object.entries(st.towns).slice(0, 255)) {
+        if (!t || typeof t !== "object") continue;
+        o.towns[String(name).slice(0, 60)] = { v: cleanPlace(t.v, 12), b: cleanPlace(t.b, 60) };
+      }
+    }
+    if (st.roads && typeof st.roads === "object") {
+      const vroads = {};
+      for (const [name, list] of Object.entries(st.roads.vroads || {}).slice(0, 255)) if (Array.isArray(list)) vroads[String(name).slice(0, 60)] = list.slice(0, 12).map(line);
+      o.roads = { links: (Array.isArray(st.roads.links) ? st.roads.links : []).slice(0, 1000).map(line).filter((l) => l.length >= 2), vroads };
+    }
+    out[String(id).slice(0, 20)] = o;
+  }
+  return out;
 }
 
 // Места городов, выбранные админом: {stateId: {провинция: [x, y]}}
@@ -1060,7 +1096,7 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
   const prov = grid.prov && Array.isArray(grid.prov.rle) ? { rle: grid.prov.rle, names: grid.prov.names || {} } : undefined;
   await ensureTerritoryVersions(env);
   if (!(await env.DB.prepare("SELECT id FROM territory_versions LIMIT 1").first())) await saveTerritoryVersion(env, "Как было до истории версий");
-  const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, cities: cleanCities(grid.cities), updated: new Date().toISOString() };
+  const gridNow = { w: grid.w, h: grid.h, owners: grid.owners, rle: grid.rle, prov, cities: cleanCities(grid.cities), manual: cleanManual(grid.manual), updated: new Date().toISOString() };
   const gridText = JSON.stringify(gridNow);
   await env.KV.put("territory_grid", gridText);
   await ensureProvinceTable(env);
