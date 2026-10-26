@@ -408,9 +408,16 @@
           .bindTooltip(escHtml(c.name), { permanent: true, direction: "top", offset: [0, -8], className: "province-label" }).addTo(cityLayer);
       }
     }
+    // Названия провинций для режимов «Города» и «Дороги и постройки». Сохранённых в сетке хватает, ждём таблицу
+    // только у государств без них, и не дольше 8 секунд: медленная таблица не должна вешать режим.
+    async function namesReady() {
+      const need = owners.filter((id, i) => owner.includes(i + 1) && !provNames.has(id) && !regionsLoaded.has(id));
+      if (!need.length) return;
+      msg(`Читаю регионы государств из таблиц (${need.length})…`);
+      await Promise.race([Promise.all(need.map(loadNames)), new Promise((r) => setTimeout(r, 8000))]);
+    }
     async function enterCities() {
-      msg("Читаю регионы государств…");
-      await Promise.all(owners.filter((id, i) => owner.includes(i + 1)).map(loadNames));
+      await namesReady();
       if (mode !== "city") return;
       cityLayer.addTo(map);
       drawCities();
@@ -586,18 +593,23 @@
     }
     function refreshIcons() { for (const [mk, it] of markers) mk.setIcon(iconFor(it)); }
     async function enterSettle() {
-      msg("Читаю регионы государств…");
-      await Promise.all(owners.filter((id, i) => owner.includes(i + 1)).map(loadNames));
-      if (mode !== "settle") return;
-      msg("Раскладываю города, деревни и дороги…");
-      await new Promise((r) => setTimeout(r, 30));
-      costs = S().costGrid(settleOpts());
-      recompute();
-      overlay.setOpacity(0.35);
-      roadLayer.addTo(map); settleLayer.addTo(map); handleLayer.addTo(map);
-      drawSettle();
-      map.on("zoomend", refreshIcons);
-      roadMsg();
+      try {
+        await namesReady();
+        if (mode !== "settle") return;
+        msg("Раскладываю города, деревни и дороги…");
+        await new Promise((r) => setTimeout(r, 30));
+        if (mode !== "settle") return;
+        costs = S().costGrid(settleOpts());
+        recompute();
+        overlay.setOpacity(0.35);
+        roadLayer.addTo(map); settleLayer.addTo(map); handleLayer.addTo(map);
+        map.on("zoomend", refreshIcons);
+        drawSettle();
+        roadMsg();
+      } catch (err) {
+        console.error(err);
+        msg("Не удалось показать города и дороги: " + err.message, true);
+      }
     }
     function leaveSettle() {
       if (drawingRoad) { drawingRoad.layer.remove(); drawingRoad = null; }
