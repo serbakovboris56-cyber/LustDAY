@@ -497,7 +497,7 @@
       if (towns.length) S.drawIcons(ctx, k, view, towns);
     }
 
-    const layer = new Layer({ tileSize: 256, noWrap: true, minZoom: 0, maxZoom: nativeZ, keepBuffer: 3, updateWhenZooming: false });
+    const layer = new Layer({ tileSize: 256, noWrap: true, minZoom: 0, maxZoom: nativeZ + 1, keepBuffer: 3, updateWhenZooming: false });
     layer.addTo(map);
 
     function prepareFeature(f) {
