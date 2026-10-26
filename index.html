@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261026-2">
+<link rel="stylesheet" href="assets/app.css?v=20261026-3">
 </head>
 <body>
 <header class="bar">
@@ -67,6 +67,7 @@
     <button class="layers__toggle" id="layersToggle" type="button" aria-expanded="true">Слои</button>
     <div class="layers__body">
       <label class="layers__item"><input type="radio" name="base" value="biomes" checked> Карта</label>
+      <ul class="layers__legend" id="biomeLegend"></ul>
       <label class="layers__item"><input type="radio" name="base" value="relief"> Рельеф</label>
       <ul class="layers__legend" id="reliefLegend" hidden></ul>
       <label class="layers__item"><input type="checkbox" data-layer="resources"> Ресурсы</label>
@@ -312,13 +313,13 @@
   </form>
 </dialog>
 
-<script src="assets/config.js?v=20261026-2"></script>
+<script src="assets/config.js?v=20261026-3"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
-<script src="assets/buildings.js?v=20261026-2"></script>
-<script src="assets/settlements.js?v=20261026-2"></script>
-<script src="assets/vector-map.js?v=20261026-2"></script>
-<script src="assets/territory-editor.js?v=20261026-2"></script>
-<script src="assets/map-layers.js?v=20261026-2"></script>
-<script src="assets/app.js?v=20261026-2"></script>
+<script src="assets/buildings.js?v=20261026-3"></script>
+<script src="assets/settlements.js?v=20261026-3"></script>
+<script src="assets/vector-map.js?v=20261026-3"></script>
+<script src="assets/territory-editor.js?v=20261026-3"></script>
+<script src="assets/map-layers.js?v=20261026-3"></script>
+<script src="assets/app.js?v=20261026-3"></script>
 </body>
 </html>
