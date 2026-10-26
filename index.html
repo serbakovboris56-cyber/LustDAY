@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261024-1">
+<link rel="stylesheet" href="assets/app.css?v=20261026-1">
 </head>
 <body>
 <header class="bar">
@@ -60,6 +60,36 @@
       <button type="button" class="btn btn--ghost" id="brushCancel">Отмена</button>
       <button type="button" class="btn" id="brushSave">Сохранить границы</button>
     </div>
+    <p class="brush__msg" role="status"></p>
+  </div>
+
+  <section class="layers" id="layers" aria-label="Слои карты">
+    <button class="layers__toggle" id="layersToggle" type="button" aria-expanded="true">Слои</button>
+    <div class="layers__body">
+      <label class="layers__item"><input type="radio" name="base" value="biomes" checked> Карта</label>
+      <label class="layers__item"><input type="radio" name="base" value="relief"> Рельеф</label>
+      <ul class="layers__legend" id="reliefLegend" hidden></ul>
+      <label class="layers__item"><input type="checkbox" data-layer="resources"> Ресурсы</label>
+      <label class="layers__item"><input type="checkbox" data-layer="places"> Интересные места</label>
+      <button class="btn btn--ghost layers__edit" id="marksEdit" type="button" hidden>Править метки</button>
+    </div>
+  </section>
+
+  <div class="brush marks-bar" id="marksBar" hidden role="toolbar" aria-label="Правка меток">
+    <div class="brush__modes">
+      <button type="button" class="btn btn--ghost" data-kind="resources" aria-pressed="true">Ресурсы</button>
+      <button type="button" class="btn btn--ghost" data-kind="places" aria-pressed="false">Интересные места</button>
+    </div>
+    <label class="brush__field">Вид <select id="marksType"></select></label>
+    <label class="brush__field">Название <input id="marksName" maxlength="80" placeholder="необязательно"></label>
+    <label class="brush__field marks-bar__text" id="marksTextField" hidden>Описание <textarea id="marksText" rows="2" maxlength="1000"></textarea></label>
+    <div class="brush__actions">
+      <button type="button" class="btn btn--ghost" id="marksNone">Новая метка</button>
+      <button type="button" class="btn btn--ghost" id="marksDelete" disabled>Удалить</button>
+      <button type="button" class="btn btn--ghost" id="marksCancel">Отмена</button>
+      <button type="button" class="btn" id="marksSave">Сохранить метки</button>
+    </div>
+    <p class="brush__msg marks-bar__hint" id="marksHint"></p>
     <p class="brush__msg" role="status"></p>
   </div>
 
@@ -282,12 +312,13 @@
   </form>
 </dialog>
 
-<script src="assets/config.js?v=20261024-1"></script>
+<script src="assets/config.js?v=20261026-1"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
-<script src="assets/buildings.js?v=20261024-1"></script>
-<script src="assets/settlements.js?v=20261024-1"></script>
-<script src="assets/vector-map.js?v=20261024-1"></script>
-<script src="assets/territory-editor.js?v=20261024-1"></script>
-<script src="assets/app.js?v=20261024-1"></script>
+<script src="assets/buildings.js?v=20261026-1"></script>
+<script src="assets/settlements.js?v=20261026-1"></script>
+<script src="assets/vector-map.js?v=20261026-1"></script>
+<script src="assets/territory-editor.js?v=20261026-1"></script>
+<script src="assets/map-layers.js?v=20261026-1"></script>
+<script src="assets/app.js?v=20261026-1"></script>
 </body>
 </html>

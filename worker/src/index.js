@@ -30,6 +30,7 @@ export default {
           if ((request.headers.get("If-None-Match") || "") === etag) return new Response(null, { status: 304, headers: { ...cors, ...cache } });
           return reply(await bordersPayload(env), 200, cache);
         }
+        if (action === "marks") return reply({ ok: true, marks: await mapMarks(env) });
         if (action === "ping") return reply({ ok: true, time: new Date().toISOString(), google: !!env.GOOGLE_SA_KEY, admin: !!adminSecret(env) });
         return reply({ ok: false, error: "Неизвестное действие" }, 404);
       }
@@ -102,6 +103,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminTurnUndo": await requireAdmin(env, body.token); return adminTurnUndo(env, ctx, body.stateIds);
     case "adminReadBuildings": await requireAdmin(env, body.token); return adminReadBuildings(env, body.stateId);
     case "adminWriteBuildings": await requireAdmin(env, body.token); return adminWriteBuildings(env, body.stateId, body);
+    case "adminSaveMarks": await requireAdmin(env, body.token); return adminSaveMarks(env, body.marks);
     case "adminSetStyle": await requireAdmin(env, body.token); return adminSetStyle(env, body.stateId, body.style);
     default: throw new HttpError("Неизвестное действие");
   }
@@ -1517,6 +1519,28 @@ async function adminSetStyle(env, stateId, style) {
   styles[String(stateId)] = style;
   await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('building_styles', ?1) ON CONFLICT(key) DO UPDATE SET value=?1").bind(JSON.stringify(styles)).run();
   return { ok: true, style };
+}
+
+/* ============================================================
+ * МЕТКИ НА КАРТЕ: ресурсы и интересные места (слои справа на сайте)
+ * ============================================================ */
+const MAP_W = 13631, MAP_H = 6760;
+async function mapMarks(env) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'map_marks'").first();
+  try { return row ? JSON.parse(row.value) : { resources: [], places: [] }; } catch { return { resources: [], places: [] }; }
+}
+async function adminSaveMarks(env, marks) {
+  const str = (v, n) => String(v == null ? "" : v).slice(0, n);
+  const clean = (list, withText) => (Array.isArray(list) ? list : []).slice(0, 3000)
+    .filter((m) => m && Number.isFinite(+m.x) && Number.isFinite(+m.y))
+    .map((m) => {
+      const o = { id: str(m.id, 16) || Math.random().toString(36).slice(2, 10), x: Math.max(0, Math.min(MAP_W, Math.round(+m.x))), y: Math.max(0, Math.min(MAP_H, Math.round(+m.y))), type: str(m.type, 20), name: str(m.name, 80) };
+      if (withText) o.text = str(m.text, 1000);
+      return o;
+    });
+  const value = { resources: clean(marks && marks.resources, false), places: clean(marks && marks.places, true) };
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('map_marks', ?1) ON CONFLICT(key) DO UPDATE SET value=?1").bind(JSON.stringify(value)).run();
+  return { ok: true, marks: value };
 }
 
 const BUILT_RANGE = "'Стройки'!B1:K250";

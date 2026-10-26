@@ -105,6 +105,10 @@
       return [...state.demoLedgers].filter(([id]) => ses.role === "admin" || id === ses.stateId)
         .map(([id, led]) => ({ id, crises: (led && led.crises) || [], misses: 0, frozen: false, freezeAfter: 3 }));
     },
+    // метки ресурсов и интересных мест (слои справа)
+    async marks() {
+      return DEMO ? getJSON("data/marks.json") : (await getJSON(`${API}?action=marks`)).marks;
+    },
     async admin(action, extra = {}) {
       if (DEMO) throw new Error("В демо-режиме изменения не сохраняются: сервер ещё не подключён.");
       return post({ action, token: state.session.token, ...extra });
@@ -119,6 +123,7 @@
 
   map.attributionControl.addAttribution("Карта мира ВПИ");
   let vector = null;           // векторная карта (assets/vector-map.js)
+  let layers = null;           // панель слоёв справа и метки (assets/map-layers.js)
   let mountains = [];          // значки гор из map.json: дороги к деревням обходят горы
   let lakes = [];              // кольца озёр из map.json: дороги не идут по воде
   let bordersGeo = { type: "FeatureCollection", features: [] };
@@ -499,6 +504,7 @@
     $("#buildBtn").hidden = !(ses && ses.role === "admin");
     $("#historyBtn").hidden = !(ses && ses.role === "admin");
     $("#brushBtn").hidden = !(ses && ses.role === "admin");
+    if (layers) layers.setAdmin(!!(ses && ses.role === "admin"));
     $("#whoami").textContent = !ses ? "" : ses.role === "admin" ? "Администратор" : own ? own.name : "";
   }
   function openLogin() {
@@ -1519,10 +1525,19 @@
 
   // Карта, цифры и границы грузятся независимо: сбой одного не мешает входу и остальному сайту.
   (async function boot() {
+    layers = window.VPIMapLayers.create({
+      map, nativeZ: NATIVE_Z, vector: () => vector,
+      load: () => api.marks(),
+      save: async (marks) => {
+        if (DEMO) throw new Error("В демо-режиме метки не сохраняются: сервер ещё не подключён.");
+        await api.admin("adminSaveMarks", { marks });
+      },
+    });
     renderBar();
     renewSession();
     const mapReady = getJSON("assets/map.json").then((mapData) => {
       vector = window.VPIVectorMap.createVectorLayer(map, mapData, NATIVE_Z);
+      layers.syncMode();
       mountains = mapData.mountains || [];
       lakes = (mapData.water || []).slice(1).flat();
     }).catch((err) => console.error("Карта не загрузилась", err));
