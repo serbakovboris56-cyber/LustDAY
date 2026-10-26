@@ -94,3 +94,20 @@ python3 -m http.server 8000
 pip install numpy scipy pillow
 python3 tools/mountain_ranges.py экспорт.svg assets/map.json
 ```
+
+Внимание: `mountain_ranges.py` заменяет все вершины, в том числе дорисованные `paint_zones.py`. После него запустите `paint_zones.py` заново.
+
+## Вода, джунгли и горы по пометкам администрации
+
+- `tools/lakes_to_sea.py` переносит водные фигуры экспорта (озёра) в море: у озёр появляются мелководье и береговая линия, острова в озёрах снова становятся сушей, а лишние фигуры в море удаляются. После него нужно пересобрать сетку кисти: `python3 tools/land_grid.py assets/map.json assets/land_grid.png`.
+- `tools/paint_zones.py скриншот.jpg assets/map.json` берёт скриншот карты с пометками: жёлтые штрихи становятся хребтами, фиолетовая зона становится биомом «Джунгли».
+
+```
+pip install numpy scipy pillow shapely
+python3 tools/lakes_to_sea.py assets/map.json
+python3 tools/land_grid.py assets/map.json assets/land_grid.png
+```
+
+## Слои карты
+
+Панель «Слои» справа: «Карта» (биомы) или «Рельеф» (пояса высот с легендой; высоты считаются в браузере по горам и удалению от берега), а поверх них «Ресурсы» и «Интересные места». Админ правит метки кнопкой «Править метки». Метки хранятся в D1 (`settings`, ключ `map_marks`) и отдаются по `GET ?action=marks`. В демо-режиме они берутся из `data/marks.json`.

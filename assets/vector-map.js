@@ -20,6 +20,7 @@
       meadow: "#728F3A",
       steppe: "#A0873F",
       desert: "#C39E59",
+      jungle: "#2E8F6A",
     },
     mountain: { light: "#A39A86", shade: "#3B3328", line: "#14110C", snow: "#E4E6E2" },
     hill: "#1A1712",
@@ -62,12 +63,98 @@
     return out;
   }
 
+  /* ---------- шум: границы биомов не гладкие, а рваные, с вкраплениями соседнего биома ---------- */
+  function hash2(ix, iy, seed) {
+    let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(seed, 1274126177);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  function vnoise(x, y, seed) {
+    const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+    const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+    const a = hash2(ix, iy, seed), b = hash2(ix + 1, iy, seed), c = hash2(ix, iy + 1, seed), d = hash2(ix + 1, iy + 1, seed);
+    return (a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v) * 2 - 1;
+  }
+  const fbm = (x, y, seed) => vnoise(x / 420, y / 420, seed) + 0.45 * vnoise(x / 160, y / 160, seed + 7) + 0.2 * vnoise(x / 55, y / 55, seed + 13);
+  const WARP = 55;   // px карты: насколько далеко гуляет граница биома
+  // Одно и то же плавное искажение плоскости для всех биомов: соседние границы сдвигаются вместе, без щелей.
+  const warp = (x, y) => [x + WARP * fbm(x, y, 1), y + WARP * fbm(x, y, 2)];
+  function densify(ring, step) {
+    const out = [];
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+      for (let j = 0; j < n; j++) out.push([a[0] + (b[0] - a[0]) * j / n, a[1] + (b[1] - a[1]) * j / n]);
+    }
+    return out;
+  }
+  function rng(seed) {
+    let s = seed >>> 0;
+    return () => { s = (s + 0x6D2B79F5) >>> 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  // Растр «какой биом сверху» (клетка CELL px карты): по нему видно, какая граница настоящая и что за ней.
+  const CELL = 8;
+  function rasterize(w, h, paint) {
+    const cv = document.createElement("canvas");
+    cv.width = Math.ceil(w / CELL); cv.height = Math.ceil(h / CELL);
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    ctx.setTransform(1 / CELL, 0, 0, 1 / CELL, 0, 0);
+    paint(ctx);
+    return { w: cv.width, h: cv.height, px: ctx.getImageData(0, 0, cv.width, cv.height).data };
+  }
+  function biomeGrid(data) {
+    const g = rasterize(data.w, data.h, (ctx) => data.biomes.forEach((bm, i) => {
+      const p = new Path2D();
+      bm.rings.forEach((r) => ringPath(r, p));
+      ctx.fillStyle = `rgb(${(i + 1) * 20},0,0)`; ctx.fill(p, "evenodd");
+    }));
+    return (x, y) => {
+      const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
+      if (cx < 0 || cy < 0 || cx >= g.w || cy >= g.h) return -1;
+      return Math.round(g.px[(cy * g.w + cx) * 4] / 20) - 1;     // -1 — голая суша без биома
+    };
+  }
+  // Пятна у границ: с каждой стороны видимой границы — кляксы биома с другой стороны, чем дальше, тем мельче и реже.
+  function spotsFor(rings, idx, at, rnd, out) {
+    for (const r of rings) {
+      for (let i = 0; i < r.length; i += 2) {
+        if (rnd() > 0.55) continue;
+        const a = r[(i + r.length - 2) % r.length], b = r[(i + 2) % r.length], q = r[i];
+        let nx = b[1] - a[1], ny = a[0] - b[0];
+        const len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
+        let inner = at(q[0] - nx * 16, q[1] - ny * 16), outer = at(q[0] + nx * 16, q[1] + ny * 16);
+        if (inner !== idx && outer === idx) { nx = -nx; ny = -ny; [inner, outer] = [outer, inner]; }
+        if (inner !== idx || outer === idx) continue;                // граница скрыта под другим биомом
+        const t = rnd() * 2 - 1, far = Math.abs(t);
+        const dist = Math.sign(t) * (8 + far * far * 120);
+        if (t < 0 && outer < 0) continue;                           // голая суша без биома пятнами не ложится
+        const color = t > 0 ? idx : outer;
+        const [cx, cy] = warp(q[0] + nx * dist, q[1] + ny * dist);
+        const rad = (7 + rnd() * 20) * (1 - 0.55 * far), n = 9, ring = [];
+        const turn = rnd() * 6.28;
+        for (let k = 0; k < n; k++) {
+          const ang = turn + k * 6.283 / n, rr = rad * (0.6 + 0.8 * rnd());
+          ring.push([cx + Math.cos(ang) * rr, cy + Math.sin(ang) * rr]);
+        }
+        // клякса: сглаженный многоугольник (кривые через середины сторон)
+        const p = new Path2D(), mid = (u, v) => [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+        const m0 = mid(ring[n - 1], ring[0]);
+        p.moveTo(m0[0], m0[1]);
+        for (let k = 0; k < n; k++) { const m1 = mid(ring[k], ring[(k + 1) % n]); p.quadraticCurveTo(ring[k][0], ring[k][1], m1[0], m1[1]); }
+        p.closePath();
+        (out[color + 1] = out[color + 1] || []).push({ b: bboxOf(ring), p });
+      }
+    }
+  }
+
   // Готовим данные один раз: Path2D + рамки, чтобы каждая плитка брала только своё.
   function prepare(data) {
     const landRings = data.water[0].slice(1).map(ringItem);
     const coastChunks = strokeChunks(data.water[0].slice(1), 400);
+    // Озёра в экспорте Figma — отдельные фигуры (tools/lakes_to_sea.py переносит их в море). Если они снова
+    // появятся, рисуем как прежде, но без длинных прямых, которыми Figma замыкает фигуры.
     const lakes = data.water.slice(1).flat().map(ringItem);
-    // Контуры озёр для обводки: в экспорте Figma часть водных фигур замыкается длинными прямыми — их не рисуем.
     const lakeLines = lakes.map((it) => {
       const p = new Path2D(), r = it.r;
       p.moveTo(r[0][0], r[0][1]);
@@ -77,10 +164,122 @@
       }
       return { b: it.b, p };
     });
-    const biomes = data.biomes.map((bm) => ({ key: bm.key, name: bm.name, rings: bm.rings.map(ringItem) }));
+    const at = biomeGrid(data), rnd = rng(20261026), spots = [];
+    const biomes = data.biomes.map((bm, i) => {
+      const dense = bm.rings.map((r) => densify(r, 12));
+      spotsFor(dense, i, at, rnd, spots);
+      return { key: bm.key, name: bm.name, rings: dense.map((r) => ringItem(r.map(([x, y]) => warp(x, y)))) };
+    });
+    const spotLayers = spots.map((items, i) => ({ key: i === 0 ? null : data.biomes[i - 1].key, items })).filter((s) => s.items);
     const rivers = data.rivers.map(([w, c]) => ({ w, b: bboxOf(c), p: linePath(c) }));
     const mountains = data.mountains.map(([x, y, s, k]) => ({ x, y, s, k, b: [x - s, y - s, x + s, y + s] }));
-    return { landRings, coastChunks, lakes, lakeLines, biomes, rivers, mountains };
+    return { landRings, coastChunks, lakes, lakeLines, biomes, spotLayers, rivers, mountains };
+  }
+
+  /* ---------- слой «Рельеф»: высоты из гор и расстояния до берега, отмывка светом с северо-запада ---------- */
+  const RELIEF = [
+    { key: "deep", name: "Глубокое море", color: "#123A66" },
+    { key: "sea", name: "Море", color: "#1F5F94" },
+    { key: "shelf", name: "Мелководье", color: "#4C9CC8" },
+    { key: "low", name: "Низменность", color: "#3F8F4A" },
+    { key: "plain", name: "Равнина", color: "#8DB45B" },
+    { key: "upland", name: "Возвышенность", color: "#E1CF6B" },
+    { key: "hills", name: "Холмы и нагорья", color: "#CF8F3E" },
+    { key: "mount", name: "Горы", color: "#985A30" },
+    { key: "peak", name: "Высокие горы и ледники", color: "#F1EEE8" },
+  ];
+  const RELIEF_EDGE = "#0E2C4D";
+  // евклидово расстояние в клетках до ближайшей клетки, где mask[i] === false (два прохода, 3-4 chamfer)
+  function chamfer(mask, w, h) {
+    const d = new Float32Array(w * h);
+    for (let i = 0; i < d.length; i++) d[i] = mask[i] ? 1e9 : 0;
+    const relax = (i, j, c) => { if (d[j] + c < d[i]) d[i] = d[j] + c; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x; if (!d[i]) continue;
+      if (x > 0) relax(i, i - 1, 3);
+      if (y > 0) { relax(i, i - w, 3); if (x > 0) relax(i, i - w - 1, 4); if (x < w - 1) relax(i, i - w + 1, 4); }
+    }
+    for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x; if (!d[i]) continue;
+      if (x < w - 1) relax(i, i + 1, 3);
+      if (y < h - 1) { relax(i, i + w, 3); if (x < w - 1) relax(i, i + w + 1, 4); if (x > 0) relax(i, i + w - 1, 4); }
+    }
+    for (let i = 0; i < d.length; i++) d[i] /= 3;
+    return d;
+  }
+  function boxBlur(a, w, h, r) {
+    const tmp = new Float32Array(a.length);
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < h; y++) {
+        let acc = 0; const row = y * w;
+        for (let x = -r; x < w; x++) {
+          if (x + r < w) acc += a[row + x + r];
+          if (x - r - 1 >= 0) acc -= a[row + x - r - 1];
+          if (x >= 0) tmp[row + x] = acc / (2 * r + 1);
+        }
+      }
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let y = -r; y < h; y++) {
+          if (y + r < h) acc += tmp[(y + r) * w + x];
+          if (y - r - 1 >= 0) acc -= tmp[(y - r - 1) * w + x];
+          if (y >= 0) a[y * w + x] = acc / (2 * r + 1);
+        }
+      }
+    }
+  }
+  const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  function buildRelief(data) {
+    const g = rasterize(data.w, data.h, (ctx) => {
+      const p = new Path2D();
+      data.water[0].slice(1).forEach((r) => ringPath(r, p));
+      ctx.fillStyle = "#fff"; ctx.fill(p, "evenodd");
+    });
+    const { w, h } = g, n = w * h;
+    const land = new Uint8Array(n), sea = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { land[i] = g.px[i * 4 + 3] >= 128 ? 1 : 0; sea[i] = 1 - land[i]; }
+    const inland = chamfer(land, w, h), offshore = chamfer(sea, w, h);
+    // горы: вершины, размазанные в массивы
+    const m = new Float32Array(n);
+    for (const [x, y, s, k] of data.mountains) {
+      const i = Math.min(h - 1, Math.floor(y / CELL)) * w + Math.min(w - 1, Math.floor(x / CELL));
+      m[i] += (k === 2 ? 1.7 : k === 1 ? 1 : 0.35) * s / 35;
+    }
+    boxBlur(m, w, h, 3);
+    // масштаб гор: 90-й перцентиль клеток с горами — середина хребта
+    const vals = [];
+    for (let i = 0; i < n; i += 7) if (m[i] > 0.02) vals.push(m[i]);
+    vals.sort((a, b) => a - b);
+    const ref = vals.length ? vals[Math.floor(vals.length * 0.9)] : 1;
+    const elev = new Float32Array(n);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!land[i]) { elev[i] = 0.1; continue; }
+      const X = x * CELL, Y = y * CELL;
+      const base = 0.1 + 0.3 * Math.min(1, inland[i] / 70) + 0.1 * fbm(X * 0.6, Y * 0.6, 5);
+      const mt = Math.min(1.25, m[i] / ref);
+      elev[i] = base + mt * (0.85 + 0.22 * fbm(X * 1.2, Y * 1.2, 9));
+    }
+    const pal = RELIEF.map((r) => hex(r.color));
+    const classOf = (e) => e < 0.22 ? 3 : e < 0.36 ? 4 : e < 0.48 ? 5 : e < 0.66 ? 6 : e < 1.08 ? 7 : 8;
+    const mk = () => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+    const landCv = mk(), seaCv = mk();
+    const li = landCv.getContext("2d").createImageData(w, h), si = seaCv.getContext("2d").createImageData(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, o = i * 4;
+      // вода: по удалению от берега
+      const dw = offshore[i], wc = pal[dw < 5 ? 2 : dw < 30 ? 1 : 0];
+      const wl = dw < 5 ? 1 : 1 - Math.min(0.25, (dw - 5) / 160);
+      si.data[o] = wc[0] * wl; si.data[o + 1] = wc[1] * wl; si.data[o + 2] = wc[2] * wl; si.data[o + 3] = 255;
+      // суша: цвет пояса высот и отмывка (склон к северо-западу светлее)
+      const e = land[i] ? elev[i] : 0.15, c = pal[classOf(e)];
+      const ex = elev[i + (x < w - 2 ? 2 : 0)] - elev[i - (x > 1 ? 2 : 0)];
+      const ey = elev[i + (y < h - 2 ? 2 * w : 0)] - elev[i - (y > 1 ? 2 * w : 0)];
+      const shade = Math.max(0.45, Math.min(1.45, 1 - (ex + ey) * 2.2));
+      li.data[o] = Math.min(255, c[0] * shade); li.data[o + 1] = Math.min(255, c[1] * shade); li.data[o + 2] = Math.min(255, c[2] * shade); li.data[o + 3] = 255;
+    }
+    landCv.getContext("2d").putImageData(li, 0, 0); seaCv.getContext("2d").putImageData(si, 0, 0);
+    return { land: landCv, sea: seaCv, W: w * CELL, H: h * CELL };
   }
 
   function pathFor(items, view) {
@@ -120,6 +319,7 @@
 
   function createVectorLayer(map, data, nativeZ) {
     const D = prepare(data);
+    let mode = "biomes", R = null;      // R — растры рельефа, строятся при первом включении слоя
     let territories = [];      // [{id, color, selected, rings: [{b, r, p}], box, provLines, provBox}]
     let lastFeatures = [];
     const prepared = new WeakMap();   // GeoJSON Feature -> готовые кольца (пересчёт только при новых границах)
@@ -185,22 +385,41 @@
     }
 
     function draw(ctx, k, view) {
-      ctx.fillStyle = STYLE.ocean;
-      ctx.fillRect(view[0], view[1], view[2] - view[0], view[3] - view[1]);
+      const relief = mode === "relief" ? (R = R || buildRelief(data)) : null;
+      if (relief) {
+        ctx.fillStyle = RELIEF_EDGE;              // за краем карты — то же глубокое море
+        ctx.fillRect(view[0], view[1], view[2] - view[0], view[3] - view[1]);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(relief.sea, 0, 0, relief.W, relief.H);
+      } else {
+        ctx.fillStyle = STYLE.ocean;
+        ctx.fillRect(view[0], view[1], view[2] - view[0], view[3] - view[1]);
+      }
       const land = pathFor(D.landRings, view);
       if (!land) return;
 
       // мелководье — светлая кайма вдоль берега (обводим только куски берега возле плитки)
-      ctx.strokeStyle = STYLE.oceanShelf; ctx.lineWidth = 34; ctx.lineJoin = "round"; ctx.lineCap = "round";
-      for (const c of D.coastChunks) if (hit(c.b, view)) ctx.stroke(c.p);
-      ctx.lineCap = "butt";
+      if (!relief) {
+        ctx.strokeStyle = STYLE.oceanShelf; ctx.lineWidth = 34; ctx.lineJoin = "round"; ctx.lineCap = "round";
+        for (const c of D.coastChunks) if (hit(c.b, view)) ctx.stroke(c.p);
+        ctx.lineCap = "butt";
+      }
 
       ctx.save();
       ctx.clip(land, "evenodd");
-      ctx.fillStyle = STYLE.land; ctx.fill(land, "evenodd");
-      for (const bm of D.biomes) {
-        const p = pathFor(bm.rings, view);
-        if (p) { ctx.fillStyle = STYLE.biomes[bm.key] || STYLE.land; ctx.fill(p, "evenodd"); }
+      if (relief) {
+        ctx.drawImage(relief.land, 0, 0, relief.W, relief.H);
+      } else {
+        ctx.fillStyle = STYLE.land; ctx.fill(land, "evenodd");
+        for (const bm of D.biomes) {
+          const p = pathFor(bm.rings, view);
+          if (p) { ctx.fillStyle = STYLE.biomes[bm.key] || STYLE.land; ctx.fill(p, "evenodd"); }
+        }
+        // вкрапления соседних биомов у границ — граница не резкая, а перемешанная (на дальнем зуме это была бы рябь)
+        if (k >= 0.1) for (const sl of D.spotLayers) {
+          const p = pathFor(sl.items, view);
+          if (p) { ctx.fillStyle = (sl.key && STYLE.biomes[sl.key]) || STYLE.land; ctx.fill(p, "nonzero"); }
+        }
       }
       // заливка территорий — под горами и реками
       const visible = [];
@@ -215,8 +434,8 @@
       const S = window.VPISettlements, towns = S ? territories.filter((t) => t.settle).map((t) => t.settle) : [];
       // дороги между городами и деревнями — под горами (идут между вершинами) и под реками
       if (towns.length) S.drawRoads(ctx, k, view, towns);
-      // горы: не рисуем, пока значок меньше 3 экранных пикселей
-      for (const m of D.mountains) if (m.s * k >= 3 && hit(m.b, view)) drawMountain(ctx, m, k);
+      // горы: не рисуем, пока значок меньше 3 экранных пикселей; на рельефе их показывает цвет
+      if (!relief) for (const m of D.mountains) if (m.s * k >= 3 && hit(m.b, view)) drawMountain(ctx, m, k);
       // реки
       ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = STYLE.river;
       for (const r of D.rivers) {
@@ -296,10 +515,12 @@
         if (changed.length) repaint(changed);
       },
       redraw() { repaint(null); },
+      // "biomes" — обычная карта, "relief" — рельеф по поясам высот (легенда — VPIVectorMap.RELIEF)
+      setMode(m) { if (m !== mode) { mode = m; repaint(null); } },
       // город под точкой карты (x, y в пикселях исходной карты) при масштабе k — для подсказки
       townAt(x, y, k) { return window.VPISettlements ? window.VPISettlements.townAt(territories.filter((t) => t.settle).map((t) => t.settle), x, y, k) : null; },
     };
   }
 
-  window.VPIVectorMap = { createVectorLayer, STYLE };
+  window.VPIVectorMap = { createVectorLayer, STYLE, RELIEF };
 })();

@@ -472,3 +472,48 @@ button { font: inherit; color: inherit; }
 .town-tip__b { margin-top: 3px; color: var(--gold-soft); font-size: 12px; }
 .town-tip::before { border-top-color: var(--gold); }
 .leaflet-container.is-town { cursor: help; }
+
+/* ---------- слои карты (справа) ---------- */
+.layers {
+  position: absolute; top: 12px; right: 12px; z-index: 850;
+  background: var(--ink); border: 1px solid var(--rule); min-width: 200px; max-width: calc(100% - 24px);
+}
+.layers[hidden] { display: none; }
+.layers__toggle {
+  display: flex; justify-content: space-between; gap: 16px; width: 100%; text-align: left;
+  background: var(--banner); border: 0; border-bottom: 1px solid var(--rule);
+  padding: 8px 12px; font: 700 15px/1.2 var(--serif); cursor: pointer;
+}
+.layers__toggle::after { content: "–"; color: var(--gold-soft); }
+.layers.is-collapsed .layers__toggle { border-bottom: 0; }
+.layers.is-collapsed .layers__toggle::after { content: "+"; }
+.layers.is-collapsed .layers__body { display: none; }
+.layers__body { display: grid; gap: 2px; padding: 6px 0 8px; }
+.layers__item { display: flex; align-items: center; gap: 10px; padding: 5px 12px; cursor: pointer; }
+.layers__item:hover { background: var(--gold-faint); }
+.layers__item input { accent-color: var(--gold); width: 16px; height: 16px; margin: 0; }
+.layers__legend { list-style: none; margin: 2px 12px 6px 38px; padding: 0; font-size: 13px; color: var(--gold-soft); display: grid; gap: 3px; }
+.layers__legend[hidden] { display: none; }
+.layers__legend li { display: flex; align-items: center; gap: 8px; }
+.layers__swatch { width: 18px; height: 12px; flex: none; border: 1px solid rgba(0, 0, 0, 0.6); }
+.layers__edit { margin: 6px 12px 0; font-size: 14px; padding: 5px 10px; }
+.layers__edit[hidden] { display: none; }
+
+.mark {
+  display: flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+  border-radius: 50%; background: rgba(0, 0, 0, 0.78); border: 1.5px solid var(--gold);
+  font-size: 16px; line-height: 1; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.7); cursor: pointer;
+}
+.mark--places { border-radius: 6px; border-color: #E8C6FF; }
+.mark.is-selected { background: var(--gold); box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.45); }
+.mark-popup .leaflet-popup-content-wrapper, .mark-popup .leaflet-popup-tip { background: var(--ink); color: var(--gold); border: 1px solid var(--rule); border-radius: 2px; }
+.mark-popup .leaflet-popup-content { margin: 8px 12px; font: 14px/1.4 var(--sans); }
+.mark-pop small { display: block; color: var(--gold-soft); }
+.mark-pop p { margin: 6px 0 0; max-width: 260px; white-space: pre-wrap; }
+.marks-bar input, .marks-bar textarea { background: var(--banner); color: var(--gold); border: 1px solid var(--rule); padding: 6px 8px; font: inherit; }
+.marks-bar__text[hidden] { display: none; }
+.marks-bar__text textarea { width: 260px; resize: vertical; }
+.marks-bar [aria-pressed="true"] { background: var(--gold); color: var(--ink); }
+.marks-bar .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+#map.is-marking { cursor: crosshair; }
+@media (max-width: 720px) { .layers { top: 8px; right: 8px; min-width: 0; } }
