@@ -109,26 +109,52 @@
       bm.rings.forEach((r) => ringPath(r, p));
       ctx.fillStyle = `rgb(${(i + 1) * 20},0,0)`; ctx.fill(p, "evenodd");
     }));
-    return (x, y) => {
+    const { w, h } = g, idx = new Int8Array(w * h);
+    for (let i = 0; i < idx.length; i++) {
+      const v = Math.round(g.px[i * 4] / 20) - 1;                    // -1 — голая суша без биома
+      idx[i] = v < data.biomes.length ? v : -1;
+    }
+    // Ближайший биом для каждой клетки (обход в ширину от клеток с биомом): им закрашивается суша,
+    // которую шум отодвинул от биомов, — иначе у берегов проступали тёмные пятна.
+    const near = Int8Array.from(idx), queue = new Int32Array(w * h);
+    let head = 0, tail = 0;
+    for (let i = 0; i < near.length; i++) if (near[i] >= 0) queue[tail++] = i;
+    while (head < tail) {
+      const i = queue[head++], x = i % w, v = near[i];
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (j >= 0 && j < near.length && near[j] < 0) { near[j] = v; queue[tail++] = j; }
+      }
+    }
+    const look = (arr) => (x, y) => {
       const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
-      if (cx < 0 || cy < 0 || cx >= g.w || cy >= g.h) return -1;
-      return Math.round(g.px[(cy * g.w + cx) * 4] / 20) - 1;     // -1 — голая суша без биома
+      if (cx < 0 || cy < 0 || cx >= w || cy >= h) return -1;
+      return arr[cy * w + cx];
     };
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext("2d"), img = ctx.createImageData(w, h);
+    const pal = data.biomes.map((bm) => hex(STYLE.biomes[bm.key] || STYLE.land));
+    for (let i = 0; i < near.length; i++) {
+      const c = near[i] >= 0 ? pal[near[i]] : hex(STYLE.land);
+      img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return { at: look(idx), near: look(near), under: cv, W: w * CELL, H: h * CELL };
   }
   // Пятна у границ: с каждой стороны видимой границы — кляксы биома с другой стороны, чем дальше, тем мельче и реже.
-  function spotsFor(rings, idx, at, rnd, out) {
+  function spotsFor(rings, idx, { at, near }, rnd, out) {
     for (const r of rings) {
       for (let i = 0; i < r.length; i += 2) {
         if (rnd() > 0.55) continue;
         const a = r[(i + r.length - 2) % r.length], b = r[(i + 2) % r.length], q = r[i];
         let nx = b[1] - a[1], ny = a[0] - b[0];
         const len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
-        let inner = at(q[0] - nx * 16, q[1] - ny * 16), outer = at(q[0] + nx * 16, q[1] + ny * 16);
+        let inner = at(q[0] - nx * 16, q[1] - ny * 16), outer = near(q[0] + nx * 16, q[1] + ny * 16);
         if (inner !== idx && outer === idx) { nx = -nx; ny = -ny; [inner, outer] = [outer, inner]; }
         if (inner !== idx || outer === idx) continue;                // граница скрыта под другим биомом
         const t = rnd() * 2 - 1, far = Math.abs(t);
         const dist = Math.sign(t) * (8 + far * far * 120);
-        if (t < 0 && outer < 0) continue;                           // голая суша без биома пятнами не ложится
+        if (t < 0 && outer < 0) continue;
         const color = t > 0 ? idx : outer;
         const [cx, cy] = warp(q[0] + nx * dist, q[1] + ny * dist);
         const rad = (7 + rnd() * 20) * (1 - 0.55 * far), n = 9, ring = [];
@@ -164,16 +190,16 @@
       }
       return { b: it.b, p };
     });
-    const at = biomeGrid(data), rnd = rng(20261026), spots = [];
+    const grid = biomeGrid(data), rnd = rng(20261026), spots = [];
     const biomes = data.biomes.map((bm, i) => {
       const dense = bm.rings.map((r) => densify(r, 12));
-      spotsFor(dense, i, at, rnd, spots);
+      spotsFor(dense, i, grid, rnd, spots);
       return { key: bm.key, name: bm.name, rings: dense.map((r) => ringItem(r.map(([x, y]) => warp(x, y)))) };
     });
     const spotLayers = spots.map((items, i) => ({ key: i === 0 ? null : data.biomes[i - 1].key, items })).filter((s) => s.items);
     const rivers = data.rivers.map(([w, c]) => ({ w, b: bboxOf(c), p: linePath(c) }));
     const mountains = data.mountains.map(([x, y, s, k]) => ({ x, y, s, k, b: [x - s, y - s, x + s, y + s] }));
-    return { landRings, coastChunks, lakes, lakeLines, biomes, spotLayers, rivers, mountains };
+    return { landRings, coastChunks, lakes, lakeLines, biomes, spotLayers, rivers, mountains, under: grid };
   }
 
   /* ---------- слой «Рельеф»: высоты из гор и расстояния до берега, отмывка светом с северо-запада ---------- */
@@ -410,7 +436,9 @@
       if (relief) {
         ctx.drawImage(relief.land, 0, 0, relief.W, relief.H);
       } else {
-        ctx.fillStyle = STYLE.land; ctx.fill(land, "evenodd");
+        // подложка — ближайший биом, растром: закрывает сушу, от которой шум отодвинул края биомов
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(D.under.under, 0, 0, D.under.W, D.under.H);
         for (const bm of D.biomes) {
           const p = pathFor(bm.rings, view);
           if (p) { ctx.fillStyle = STYLE.biomes[bm.key] || STYLE.land; ctx.fill(p, "evenodd"); }
