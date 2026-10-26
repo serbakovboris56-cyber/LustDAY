@@ -41,7 +41,10 @@
     const groups = { resources: L.layerGroup(), places: L.layerGroup() };
     const toLatLng = (x, y) => map.unproject([x, y], nativeZ);
 
-    // легенда рельефа
+    // легенды: биомы обычной карты и пояса рельефа
+    const BIOMES = [["snow", "Льды"], ["tundra", "Тундра"], ["taiga", "Тайга"], ["forest", "Леса"], ["jungle", "Джунгли"], ["meadow", "Луга"], ["steppe", "Степи"], ["desert", "Пустыни"]];
+    const biomeColors = window.VPIVectorMap.STYLE.biomes;
+    $("#biomeLegend").innerHTML = BIOMES.map(([k, name]) => `<li><span class="layers__swatch" style="background:${biomeColors[k]}"></span>${esc(name)}</li>`).join("");
     $("#reliefLegend").innerHTML = window.VPIVectorMap.RELIEF.slice().reverse()
       .map((r) => `<li><span class="layers__swatch" style="background:${r.color}"></span>${esc(r.name)}</li>`).join("");
 
@@ -79,6 +82,7 @@
       const base = root.querySelector('input[name="base"]:checked').value;
       if (opts.vector()) opts.vector().setMode(base);
       $("#reliefLegend").hidden = base !== "relief";
+      $("#biomeLegend").hidden = base !== "biomes";
       for (const kind of ["resources", "places"]) {
         const on = root.querySelector(`input[data-layer="${kind}"]`).checked || (editing && editing.kind === kind);
         if (on && !map.hasLayer(groups[kind])) groups[kind].addTo(map);

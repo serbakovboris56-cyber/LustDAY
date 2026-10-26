@@ -20,7 +20,7 @@
       meadow: "#728F3A",
       steppe: "#A0873F",
       desert: "#C39E59",
-      jungle: "#2E8F6A",
+      jungle: "#223319",
     },
     mountain: { light: "#A39A86", shade: "#3B3328", line: "#14110C", snow: "#E4E6E2" },
     hill: "#1A1712",
