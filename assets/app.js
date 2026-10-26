@@ -132,7 +132,7 @@
     map.fitBounds(bounds, { animate: false });
     const fit = map.getBoundsZoom(bounds, false);
     map.setMinZoom(Math.max(0, fit - 0.5));
-    map.setMaxZoom(NATIVE_Z + 1);
+    map.setMaxZoom(NATIVE_Z);
     map.setMaxBounds(bounds.pad(0.2));
     // На вертикальном экране карта иначе превращается в узкую полоску — заполняем высоту.
     if (innerHeight > innerWidth) {
