@@ -1486,6 +1486,7 @@
       map, nativeZ: NATIVE_Z, mountains, lakes,
       states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
+      info: (id) => { const s = state.byId.get(id); return s ? { regions: (s.public && s.public.provinces) || null, style: s.style } : null; },
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
       // провинции — это регионы из таблицы государства
       loadRegions: async (id) => {
