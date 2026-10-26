@@ -477,7 +477,7 @@
       let w = Math.min(it.w * k, it.w);
       if (it.min) w = Math.max(w, it.min);
       const sc = w / it.spr.nw;
-      return L.icon({ iconUrl: iconURL(it.spr), iconSize: [it.spr.w * sc, it.spr.h * sc], iconAnchor: [it.spr.ax * sc, it.spr.ay * sc], className: "settle-icon" });
+      return L.icon({ iconUrl: iconURL(it.spr), iconSize: [it.spr.w * sc, it.spr.h * sc], iconAnchor: [it.spr.ax * sc, it.spr.ay * sc], className: "settle-icon settle-icon--" + ["city", "village", "building"][it.kind] });
     }
     const markers = [];
     function drawSettle() {
