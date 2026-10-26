@@ -1,5 +1,5 @@
 """Разнообразие в джунглях: вдоль побережий — полоса лугов неровной ширины, внутри — луговые поляны,
-под горными хребтами — луга. Одиночные вершины вокруг хребтов в зоне джунглей удаляются.
+под горами и вокруг них — луга. Сами горы не трогаются.
 
 Переписывает биом «Джунгли» в assets/map.json и кладёт перед ним биом «Луга» (ключ meadow)
 только с этими полосами и полянами. Повторный запуск берёт джунгли вместе с прежними лугами.
@@ -20,7 +20,6 @@ from paint_zones import mask_to_rings  # noqa: E402
 CELL = 4          # px карты на клетку
 COAST = 70        # средняя ширина прибрежных лугов, px карты
 SPREAD = 55       # насколько ширина гуляет
-LONELY = 6        # вершина, у которой меньше стольких соседей в радиусе 130 px, — одиночная
 
 
 def raster(rings, W, H, f):
@@ -55,19 +54,12 @@ def main(path):
     width = COAST + SPREAD * noise((H, W), 40 / CELL * 3, 3).clip(-1.2, 1.2)
     coast = zone & land & (inland < width)
     glades = zone & land & (noise((H, W), 120 / CELL, 8) > 1.25) & (noise((H, W), 25 / CELL, 9) > -0.6)
-    # горы в зоне: одиночные вершины убираем, под хребтами — луга
-    inside = lambda p: 0 <= (p[0] - x0) / CELL < W and 0 <= (p[1] - y0) / CELL < H and zone[int((p[1] - y0) / CELL), int((p[0] - x0) / CELL)]
-    peaks = np.array([p[:2] for p in d["mountains"]], float)
-    keep, ridge = [], np.zeros((H, W), bool)
-    for p in d["mountains"]:
-        if inside(p):
-            n = int((((peaks - p[:2]) ** 2).sum(1) < 130 ** 2).sum()) - 1
-            if n < LONELY:
-                continue
-            ridge[int((p[1] - y0) / CELL), int((p[0] - x0) / CELL)] = True
-        keep.append(p)
-    removed = len(d["mountains"]) - len(keep)
-    d["mountains"] = keep
+    # под горами и вокруг них — луга
+    ridge = np.zeros((H, W), bool)
+    for x, y, *_ in d["mountains"]:
+        cx, cy = int((x - x0) / CELL), int((y - y0) / CELL)
+        if 0 <= cx < W and 0 <= cy < H:
+            ridge[cy, cx] = True
     under = ndi.binary_dilation(ridge, iterations=int(70 / CELL))
     under = ndi.binary_closing(under, iterations=int(40 / CELL)) & zone & land
     meadow = ndi.binary_opening(coast | glades, iterations=2) | under
@@ -78,7 +70,7 @@ def main(path):
     d["biomes"] = [b for b in d["biomes"] if b.get("zone") != "jungle"]
     d["biomes"].insert(d["biomes"].index(jb), new)
     json.dump(d, open(path, "w", encoding="utf-8"), separators=(",", ":"), ensure_ascii=False)
-    print(f"джунгли: колец {len(jb['rings'])}; луга: колец {len(new['rings'])}; убрано одиночных вершин {removed}")
+    print(f"джунгли: колец {len(jb['rings'])}; луга: колец {len(new['rings'])}")
 
 
 if __name__ == "__main__":
