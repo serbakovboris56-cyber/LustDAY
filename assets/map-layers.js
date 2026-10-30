@@ -26,6 +26,8 @@
     { key: "mystery", name: "Тайна", icon: "❓" },
   ];
   const KINDS = { resources: RESOURCES, places: PLACES };
+  // Значки-булавки лежат в assets/marks/<key>.png; эмодзи остаются для выпадающего списка.
+  const pinSrc = (key) => `assets/marks/${key}.png`;
   const typeOf = (kind, key) => KINDS[kind].find((t) => t.key === key) || KINDS[kind][0];
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const newId = () => Math.random().toString(36).slice(2, 10);
@@ -52,13 +54,13 @@
       const t = typeOf(kind, m.type);
       return L.divIcon({
         className: "",
-        html: `<span class="mark mark--${kind}${selected ? " is-selected" : ""}" title="${esc(m.name || t.name)}">${t.icon}</span>`,
-        iconSize: [30, 30], iconAnchor: [15, 15],
+        html: `<span class="mark mark--${kind}${selected ? " is-selected" : ""}" title="${esc(m.name || t.name)}"><img src="${pinSrc(t.key)}" alt=""></span>`,
+        iconSize: [26, 50], iconAnchor: [13, 50],
       });
     }
     function popupHtml(kind, m) {
       const t = typeOf(kind, m.type);
-      return `<div class="mark-pop"><b>${t.icon} ${esc(m.name || t.name)}</b>${m.name ? `<small>${esc(t.name)}</small>` : ""}${m.text ? `<p>${esc(m.text)}</p>` : ""}</div>`;
+      return `<div class="mark-pop"><b><img class="mark-pop__pin" src="${pinSrc(t.key)}" alt=""> ${esc(m.name || t.name)}</b>${m.name ? `<small>${esc(t.name)}</small>` : ""}${m.text ? `<p>${esc(m.text)}</p>` : ""}</div>`;
     }
     function render(kind) {
       const g = groups[kind];
@@ -70,7 +72,7 @@
           mk.on("click", (e) => { L.DomEvent.stopPropagation(e); pick(kind, m); });
           mk.on("dragend", () => { const p = map.project(mk.getLatLng(), nativeZ); m.x = Math.round(p.x); m.y = Math.round(p.y); dirty(); });
         } else {
-          mk.bindPopup(popupHtml(kind, m), { className: "mark-popup", closeButton: false, offset: [0, -10] });
+          mk.bindPopup(popupHtml(kind, m), { className: "mark-popup", closeButton: false, offset: [0, -44] });
         }
         g.addLayer(mk);
       }
