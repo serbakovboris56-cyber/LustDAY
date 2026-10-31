@@ -181,7 +181,8 @@
   }
   function paintTerritories() {
     if (!vector) return;
-    vector.setTerritories(bordersGeo.features, (id) => {
+    // контур государства, которого нет в списке (удалено), не рисуем: иначе он закрашивался жёлтым по умолчанию
+    vector.setTerritories(bordersGeo.features.filter((f) => state.byId.has(f.properties.id)), (id) => {
       const s = state.byId.get(id);
       return s ? { color: s.color, selected: state.selected === id, regions: (s.public && s.public.provinces) || null, style: s.style } : null;
     });
@@ -195,6 +196,7 @@
     state.layers.clear();
     paintTerritories();
     bordersLayer = L.geoJSON(bordersGeo, {
+      filter: (f) => state.byId.has(f.properties.id),
       coordsToLatLng: (c) => toLatLng(c[0], c[1]),
       style: () => ({ stroke: false, fillColor: "#FFD700", fillOpacity: 0 }),
       onEachFeature: (f, layer) => {
