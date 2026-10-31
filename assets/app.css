@@ -534,3 +534,34 @@ button { font: inherit; color: inherit; }
 .marks-bar .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 #map.is-marking { cursor: crosshair; }
 @media (max-width: 720px) { .layers { top: 8px; right: 8px; min-width: 0; } }
+
+/* ---------- линейка масштаба и измерение расстояния (assets/map-ruler.js) ---------- */
+.map-scale {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  margin: 0 10px 6px 0 !important;
+  padding: 3px 8px 5px; border-radius: 6px;
+  background: rgba(0, 0, 0, .62); color: var(--gold);
+  font: 600 12px/1 var(--sans); letter-spacing: .02em;
+  pointer-events: auto; user-select: none;
+}
+.map-scale__bar {
+  display: block; height: 6px;
+  border: 2px solid var(--gold); border-top: none;
+  transition: width .15s ease-out;
+}
+.map-ruler__btn { display: flex !important; align-items: center; justify-content: center; }
+.map-ruler__btn.is-on, .map-ruler__btn.is-on:hover { background: var(--gold) !important; color: var(--ink) !important; }
+#map.is-measuring, #map.is-measuring .leaflet-interactive { cursor: crosshair !important; }
+.measure-tip {
+  background: rgba(0, 0, 0, .82); color: var(--gold);
+  border: 1px solid var(--gold); border-radius: 6px; box-shadow: none;
+  padding: 3px 8px; font: 600 13px/1.25 var(--sans); white-space: nowrap;
+}
+.measure-tip::before { display: none; }
+.measure-tip span { display: block; font-weight: 400; font-size: 11px; color: var(--gold-soft); }
+.measure-hint {
+  position: absolute; z-index: 800; left: 50%; top: 12px; transform: translateX(-50%);
+  max-width: calc(100% - 32px); padding: 6px 12px; border-radius: 6px;
+  background: rgba(0, 0, 0, .78); border: 1px solid var(--rule); color: var(--gold);
+  font-size: 13px; text-align: center; pointer-events: none;
+}
