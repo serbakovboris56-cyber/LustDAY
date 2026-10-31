@@ -1586,83 +1586,149 @@
 
   /* ---------------- города и деревни ---------------- */
 
-  const CITY_W = [38, 50, 64, 80];
+  // По уровням: 0 аванпост колонистов, 1 маленький город, 2 город, 3 средний город, 4 большой город
+  const CITY_W = [34, 46, 64, 80, 100];
   const homesKinds = {
     west: { walls: ["wall", "wood", "wall", "stone"], roofs: ["roof", "roof2", "roof", "slate"] },
     slav: { walls: ["wall", "wood", "wall", "wood"], roofs: ["roof", "roof", "roof2", "thatch"] },
     east: { walls: ["wall", "white", "wall", "wood"], roofs: ["roof2", "roof", "thatch", "roof2"] },
   };
+  /* Аванпост колонистов: частокол по кругу, внутри палатки, пара срубов и сторожевая вышка,
+   * у столицы на вышке флаг государства. */
+  function outpostSprite(capital, color, variant, style) {
+    const W = CITY_W[0], H = W * 0.78 + 16, base = H - 6;
+    return sprite(`city|${style}|0|${capital ? color : ""}|${variant}`, W, H, base, (g, cx, gy0) => {
+      const K = makeKit(g, style, color), S = K.S;
+      const rx = 11, ry = 5.5, gy = gy0 - ry - 1.5;
+      const rand = rng(hashStr("outpost" + variant));
+      g.save(); g.fillStyle = S.groundD; g.beginPath(); g.ellipse(cx, gy, rx + 1.5, ry + 1, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = S.ground; g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, 0, Math.PI * 2); g.fill(); g.restore();
+      K.field(cx + (variant % 2 ? -16 : 16), gy + 1, 4.5, S.field1, S.field2);
+      K.tree(cx + (variant % 2 ? 15 : -15), gy - 2, 2.6); K.tree(cx + (variant % 2 ? 17 : -17.5), gy, 2.2);
+      // частокол: задняя половина, потом всё внутри, потом передняя
+      const ring = (from, to) => {
+        const n = 9;
+        for (let k = 0; k < n; k++) {
+          const a0 = from + ((to - from) * k) / n, a1 = from + ((to - from) * (k + 1)) / n;
+          if (to > Math.PI && a0 < Math.PI * 1.5 + 0.2 && a1 > Math.PI * 1.5 - 0.2) continue;       // ворота сзади нет; проём спереди
+          if (to <= Math.PI && a0 < Math.PI * 0.5 + 0.25 && a1 > Math.PI * 0.5 - 0.25) continue;
+          K.palisade(cx + Math.cos(a0) * rx, gy + Math.sin(a0) * ry, cx + Math.cos(a1) * rx, gy + Math.sin(a1) * ry, 2.6);
+        }
+      };
+      ring(Math.PI, Math.PI * 2);
+      const parts = [
+        { y: gy - 2.2, draw: () => K.hall(cx + 4, gy - 2.2, 3.4, 2.4, 2.2, { wall: "wood", roof: style === "east" ? "roof" : "thatch", rh: 1.8, over: 0.5 }) },
+        { y: gy + 1.6, draw: () => K.tent(cx + 2.5, gy + 1.6, 2.2, 3.4) },
+        { y: gy + 2.4, draw: () => K.tent(cx - 3.2, gy + 2.4, 2, 3.1, rand() < 0.5 ? "tentR" : "tent") },
+        { y: gy - 0.4, draw: () => {
+          // сторожевая вышка на четырёх столбах
+          const x = cx - 5, y = gy - 0.4, h = 9;
+          for (const [dx, dy] of [[-1.3, -0.5], [1.3, -0.5], [-1.3, 0.5], [1.3, 0.5]]) K.lin(x + dx, y + dy, x + dx * 0.8, y + dy - h, S.woodPlank[1], 0.55);
+          K.lin(x - 1.2, y - h * 0.45, x + 1.2, y - h * 0.45, S.woodPlank[0], 0.4);
+          K.poly([[x - 2, y - h], [x + 2, y - h], [x + 2, y - h - 1.6], [x - 2, y - h - 1.6]], S.woodPlank[0]);
+          K.poly([[x - 2.4, y - h - 1.6], [x, y - h - 4.4], [x + 2.4, y - h - 1.6]], style === "east" ? S.roof[0] : S.thatch[0]);
+          if (capital) K.flag(x + 0.2, y - h - 4, 4.2, color);
+        } },
+      ];
+      if (variant) parts.push({ y: gy - 3.4, draw: () => K.hall(cx - 0.5, gy - 3.4, 2.8, 2.2, 1.9, { wall: "wood", roof: style === "east" ? "roof" : "thatch", rh: 1.5, over: 0.5 }) });
+      parts.sort((a, b) => a.y - b.y).forEach((p) => p.draw());
+      K.hay(cx + 6.5, gy + 2.6, 1.2, 0.8, 0.7);
+      ring(0, Math.PI);
+    });
+  }
   /* Город — плотная россыпь мелких домов: дома растут от центра рядами вдоль изометрических улиц,
    * под ними — утоптанная земля, на окраинах — сады и поля. В центре храм, у столицы — донжон с флагом
-   * государства, у города и большого города — стены с башнями. tier 0 посёлок … 3 большой город. */
+   * государства. У маленького города стен нет, у города и среднего — каменная стена с башнями,
+   * у большого — стена выше, башни крупнее, а за стеной разрастаются посады. */
   function citySprite(tier, capital, color, variant, style) {
     style = PAL[style] ? style : DEFAULT_STYLE;
-    const W = CITY_W[tier], R = [11, 17, 24, 32][tier], n = [14, 34, 62, 100][tier];
-    const H = W * 0.78 + 14, base = H - 6;
+    tier = Math.max(0, Math.min(4, tier | 0));
+    if (tier === 0) return outpostSprite(capital, color, variant, style);
+    const W = CITY_W[tier], R = [0, 14, 24, 32, 38][tier], n = [0, 26, 62, 100, 150][tier], nOut = tier >= 4 ? 34 : 0;
+    const walled = tier >= 2, big = tier >= 4;
+    const H = W * 0.78 + 14 + (big ? 6 : 0), base = H - 6 - (big ? 4 : 0);
     return sprite(`city|${style}|${tier}|${capital ? color : ""}|${variant}`, W, H, base, (g, cx, gy0) => {
       const K = makeKit(g, style, color), S = K.S, kinds = homesKinds[style];
       const gy = gy0 - R * 0.5 - 2;
       const rand = rng(hashStr("city" + tier + "|" + variant));
-      const inside = (x, y) => ((x - cx) / R) ** 2 + ((y - gy) / (R * 0.5)) ** 2 <= 1;
+      const e2 = (x, y, r) => ((x - cx) / r) ** 2 + ((y - gy) / (r * 0.5)) ** 2;
+      const inside = (x, y) => e2(x, y, R) <= 1;
       const homes = [{ x: cx, y: gy + 1 }], step = 3.7;
-      const free = (x, y) => homes.every((p) => Math.abs(p.x - x) > 3.1 || Math.abs(p.y - y) > 1.7);
+      const free = (x, y, list) => list.every((p) => Math.abs(p.x - x) > 3.1 || Math.abs(p.y - y) > 1.7);
       const keepAt = capital ? { x: cx - R * 0.62, y: gy - R * 0.22 } : null;
-      const clear = (x, y) => Math.hypot(x - cx, (y - gy) * 2) > (tier ? 7 : 0) && (!keepAt || Math.hypot(x - keepAt.x, (y - keepAt.y) * 2) > 7.5);
+      const clear = (x, y) => Math.hypot(x - cx, (y - gy) * 2) > 7 && (!keepAt || Math.hypot(x - keepAt.x, (y - keepAt.y) * 2) > 7.5);
       for (let t = 0; t < n * 40 && homes.length < n; t++) {
         const p = homes[Math.floor(rand() * homes.length)];
         const dir = Math.floor(rand() * 4), dx = [1, -1, 1, -1][dir] * step, dy = [-0.5, 0.5, 0.5, -0.5][dir] * step;
         const x = p.x + dx + (rand() - 0.5) * 0.8, y = p.y + dy + (rand() - 0.5) * 0.4;
-        if (!inside(x, y) || !free(x, y) || !clear(x, y)) continue;
-        if (rand() < (((x - cx) / R) ** 2 + ((y - gy) / (R * 0.5)) ** 2) * 0.55) continue;
+        if (!inside(x, y) || !free(x, y, homes) || !clear(x, y)) continue;
+        if (rand() < e2(x, y, R) * 0.55) continue;
         homes.push({ x, y });
       }
-      if (tier) homes.shift();
+      homes.shift();
+      // посады большого города: кольцо домов за стеной, гуще у дорог (слева и справа)
+      const outer = [], wr = R + 3.5;
+      for (let t = 0; t < nOut * 60 && outer.length < nOut; t++) {
+        const a = rand() * Math.PI * 2, rr = wr + 3 + rand() * 9;
+        const x = cx + Math.cos(a) * rr, y = gy + Math.sin(a) * rr * 0.5;
+        if (Math.abs(Math.sin(a)) > 0.75 && rand() < 0.7) continue;
+        if (!free(x, y, outer)) continue;
+        outer.push({ x, y });
+      }
       g.save();
       for (const [col, pad] of [[S.groundD, 3.6], [S.ground, 2.8]]) {
         g.fillStyle = col; g.beginPath();
-        for (const p of homes) { g.moveTo(p.x + pad * 1.4, p.y); g.ellipse(p.x, p.y, pad * 1.4, pad * 0.75, 0, 0, Math.PI * 2); }
-        if (tier) { g.moveTo(cx + 9, gy); g.ellipse(cx, gy, 9, 4.5, 0, 0, Math.PI * 2); }
+        for (const p of homes.concat(outer)) { g.moveTo(p.x + pad * 1.4, p.y); g.ellipse(p.x, p.y, pad * 1.4, pad * 0.75, 0, 0, Math.PI * 2); }
+        g.moveTo(cx + 9, gy); g.ellipse(cx, gy, 9, 4.5, 0, 0, Math.PI * 2);
         g.fill();
       }
       g.restore();
-      if (tier) for (let k = 0; k < tier + 2; k++) {
-        const a = rand() * Math.PI * 2, rr = R + 4 + rand() * 4;
+      for (let k = 0; k < tier + 2; k++) {
+        const a = rand() * Math.PI * 2, rr = (big ? wr + 13 : R + 4) + rand() * 4;
         const fx = cx + Math.cos(a) * rr, fy = gy + Math.sin(a) * rr * 0.5;
         if (fy > gy + R * 0.3) continue;
         if (rand() < 0.5) K.field(fx, fy, 4 + rand() * 2, rand() < 0.5 ? S.field1 : S.field3, S.field2);
         else { K.tree(fx, fy, 2.6); K.tree(fx + 2.4, fy + 0.8, 2.2); }
       }
-      const parts = homes.map((p) => {
-        const big = rand() < (tier >= 2 ? 0.18 : 0.08);
+      const home = (p, bigP) => {
+        const large = rand() < bigP;
         const wi = Math.floor(rand() * 4), ri = Math.floor(rand() * 4);
-        const roofK = tier === 0 && rand() < 0.5 ? "thatch" : kinds.roofs[ri];
-        const a = big ? 4.6 : 2.6 + rand() * 1.4, b = big ? 3 : 1.9 + rand() * 0.9, h = big ? 3.8 : 2 + rand() * 1.2, rh = 1.5 + rand() * 1.1;
+        const roofK = tier === 1 && rand() < 0.35 ? "thatch" : kinds.roofs[ri];
+        const a = large ? 4.6 : 2.6 + rand() * 1.4, b = large ? 3 : 1.9 + rand() * 0.9, h = large ? 3.8 : 2 + rand() * 1.2, rh = 1.5 + rand() * 1.1;
         return { y: p.y, draw: () => K.hall(p.x, p.y, a, b, h, { wall: kinds.walls[wi], roof: roofK, rh, over: 0.5 }) };
-      });
-      if (tier) parts.push({ y: gy, draw: () => K.temple(cx, gy + 1, tier) });
+      };
+      const parts = homes.map((p) => home(p, tier >= 2 ? 0.18 : 0.08));
+      const outBack = outer.filter((p) => p.y < gy).map((p) => home(p, 0.05)).sort((a, b) => a.y - b.y);
+      const outFront = outer.filter((p) => p.y >= gy).map((p) => home(p, 0.05)).sort((a, b) => a.y - b.y);
+      parts.push({ y: gy, draw: () => K.temple(cx, gy + 1, Math.min(tier, 4)) });
       if (keepAt) parts.push({ y: keepAt.y, draw: () => {
-        const kx = keepAt.x, ky = keepAt.y + 3;
-        if (tier >= 1) K.tower(kx + 6, ky - 2.6, 1.7, 8 + tier * 1.5, { top: "cone", coneH: 4.5 });
-        const k = K.keep(kx, ky, 6, 5, 11 + tier * 2);
+        const kx = keepAt.x, ky = keepAt.y + 3, kt = Math.min(tier, 3);
+        K.tower(kx + 6, ky - 2.6, 1.7, 8 + kt * 1.5, { top: "cone", coneH: 4.5 });
+        if (big) K.tower(kx - 6, ky - 1.8, 1.7, 9 + kt * 1.5, { top: "cone", coneH: 4.5 });
+        const k = K.keep(kx, ky, 6 + (big ? 1 : 0), 5 + (big ? 1 : 0), 11 + kt * 2 + (big ? 2 : 0));
         K.flag(kx + 0.2, k.top - 1.2, 7, color);
       } });
       parts.sort((a, b) => a.y - b.y);
       const wall = (from, to) => {
-        const rx = R + 3.5, ry = (R + 3.5) * 0.5, [sl, sd] = K.slav ? S.brick : S.stone;
+        const rx = wr, ry = wr * 0.5, [sl, sd] = K.slav ? S.brick : S.stone, th = big ? 1.3 : 1;
         g.save();
-        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 2.6; g.strokeStyle = LINE; g.stroke();
-        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 1.8; g.strokeStyle = sd; g.stroke();
-        g.beginPath(); g.ellipse(cx, gy - 1.3, rx, ry, 0, from, to); g.lineWidth = 1.4; g.strokeStyle = sl; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 2.6 * th; g.strokeStyle = LINE; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy, rx, ry, 0, from, to); g.lineWidth = 1.8 * th; g.strokeStyle = sd; g.stroke();
+        g.beginPath(); g.ellipse(cx, gy - 1.3 * th, rx, ry, 0, from, to); g.lineWidth = 1.4 * th; g.strokeStyle = sl; g.stroke();
         g.restore();
-        const nT = tier >= 3 ? 10 : 8;
+        const nT = big ? 12 : tier >= 3 ? 10 : 8;
         for (let k = 0; k <= nT / 2; k++) {
           const a = from + ((to - from) * k) / (nT / 2);
-          K.tower(cx + Math.cos(a) * rx, gy + Math.sin(a) * ry + 0.8, 1.6, 5, { wall: K.slav ? "brick" : "stone", top: tier >= 3 || !K.west ? "cone" : "flat", coneH: 3.5, win: false, bands: false });
+          K.tower(cx + Math.cos(a) * rx, gy + Math.sin(a) * ry + 0.8, big ? 2 : 1.6, big ? 6.5 : 5, { wall: K.slav ? "brick" : "stone", top: tier >= 3 || !K.west ? "cone" : "flat", coneH: big ? 4.2 : 3.5, win: false, bands: false });
         }
+        // надвратная башня спереди у большого города
+        if (big && to <= Math.PI) K.tower(cx, gy + ry + 0.8, 2.6, 8, { wall: K.slav ? "brick" : "stone", top: "cone", coneH: 5, win: false, bands: false });
       };
-      if (tier >= 2) wall(Math.PI, Math.PI * 2);
+      outBack.forEach((p) => p.draw());
+      if (walled) wall(Math.PI, Math.PI * 2);
       parts.forEach((p) => p.draw());
-      if (tier >= 2) wall(0, Math.PI);
+      if (walled) wall(0, Math.PI);
+      outFront.forEach((p) => p.draw());
     });
   }
   function villageSprite(variant, style) {

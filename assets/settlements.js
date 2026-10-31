@@ -356,7 +356,8 @@
 
   /* ---------------- значки ---------------- */
   // Рисунки городов, деревень и зданий — в assets/buildings.js (VPIBuildings), в стиле государства.
-  const CITY_MAP = [90, 105, 120, 140];         // ширина значка города в пикселях карты: чуть крупнее деревни (80)
+  // ширина значка города в пикселях карты по уровням: аванпост чуть крупнее деревни (80), дальше растёт с населением
+  const CITY_MAP = [84, 98, 120, 140, 166];
   const B_MAP = 2.6, VILLAGE_MAP = 80;          // постройки (на единицу рисунка) и деревни в пикселях карты
 
   // «Ферма x3», «3 фермы», «Ферма (3)», «Ферма ×3 шт.» → { name, n }
@@ -427,9 +428,13 @@
     return out;
   }
 
-  const tierOf = (pop) => (pop >= 150000 ? 3 : pop >= 60000 ? 2 : pop >= 15000 ? 1 : 0);
-  const TIER_NAMES = ["Посёлок", "Малый город", "Город", "Большой город"];
-  const villagesFor = (pop) => Math.max(1, Math.min(VILLAGE_SLOTS, 1 + Math.floor(pop / 12000)));
+  // Уровни города по населению провинции: до 1 тыс. — аванпост колонистов, до 40 тыс. — маленький город,
+  // до 100 тыс. — город, до 250 тыс. — средний город, больше — большой город
+  const TIER_FROM = [1000, 40000, 100000, 250000];
+  const tierOf = (pop) => TIER_FROM.filter((v) => pop >= v).length;
+  const TIER_NAMES = ["Аванпост колонистов", "Маленький город", "Город", "Средний город", "Большой город"];
+  // у аванпоста деревень нет, дальше одна на каждые 12 тыс. жителей
+  const villagesFor = (pop) => (pop < TIER_FROM[0] ? 0 : Math.max(1, Math.min(VILLAGE_SLOTS, 1 + Math.floor(pop / 12000))));
 
   /**
    * data — properties.provinces государства ({towns, links}); regions — [{name, type, population, buildings}]
@@ -447,7 +452,7 @@
       const pop = reg ? Number(reg.population) || 0 : 0;
       const tier = tierOf(pop), capital = reg ? /столиц/i.test(reg.type || "") : t.i === 0 && data.towns.length > 1;
       const variant = hashStr(t.name) % 3;
-      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 20 + tier * 6, ref: { town: t.name },
+      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 18 + tier * 6, ref: { town: t.name },
         tip: { name: t.name, tier: TIER_NAMES[tier], capital, pop, buildings: reg ? reg.buildings || [] : [] } });
       grow(t.x, t.y);
       const nv = reg ? Math.min(t.villages.length, villagesFor(pop)) : Math.min(t.villages.length, 2);
@@ -530,5 +535,5 @@
     return best && best.tip;
   }
 
-  window.VPISettlements = { compute, cityPoints, prepare, placeBuildings, costGrid, drawRoads, drawIcons, townAt, parseBuilding, villagesFor, CELL };
+  window.VPISettlements = { compute, cityPoints, prepare, placeBuildings, costGrid, drawRoads, drawIcons, townAt, parseBuilding, villagesFor, tierOf, TIER_NAMES, CELL };
 })();
