@@ -9,6 +9,8 @@ const SNAPSHOT_MAX_AGE = 30 * 60 * 1000;   // старше — пересобр�
 const COLORS = ["#C8463A", "#3D7FCF", "#3E9E62", "#C9A646", "#9277C9", "#4FA3A0", "#B8734A", "#D46A9F", "#7E8C99", "#8FB34A", "#E08A3C", "#5B6FD6", "#A64A6E", "#3FB6C9", "#B0A060"];
 const ESTATES = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
 const RESOURCE_NAMES = ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"];
+import { handleMcp } from "./mcp.js";
+
 const CRISIS_NAMES = ["Голод", "Бунт феодалов", "Религиозный раскол", "Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];
 
 class HttpError extends Error {
@@ -19,6 +21,18 @@ export default {
   async fetch(request, env, ctx) {
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    // MCP-сервер для Claude и других ИИ-клиентов (см. src/mcp.js)
+    if (/^\/mcp(\/|$)/.test(new URL(request.url).pathname)) {
+      try {
+        const res = await handleMcp(request, await mcpKey(env), mcpApi(env, ctx, request));
+        const h = new Headers(res.headers);
+        for (const [k, v] of Object.entries(cors)) h.set(k, v);
+        return new Response(res.body, { status: res.status, headers: h });
+      } catch (err) {
+        console.error(err && err.stack || err);
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Ошибка сервера: " + (err && err.message || err) } }), { status: 500, headers: { ...cors, "Content-Type": "application/json; charset=utf-8" } });
+      }
+    }
     const reply = (obj, status = 200, extra = {}) => new Response(obj instanceof RawJSON ? obj.text : JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json; charset=utf-8", ...extra } });
     try {
       if (request.method === "GET") {
@@ -61,7 +75,7 @@ function corsHeaders(request, env) {
   return {
     "Access-Control-Allow-Origin": ok ? origin : allowed[0] || "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Protocol-Version, Mcp-Session-Id",
     "Access-Control-Expose-Headers": "ETag",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
@@ -81,6 +95,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
+    case "adminMcpRotate": await requireAdmin(env, body.token); return adminMcpRotate(env);
     case "adminChangePassword": return adminChangePassword(env, await requireAdmin(env, body.token), body.password);
     case "adminReadInputs": await requireAdmin(env, body.token); return adminReadInputs(env, body.stateId);
     case "adminWriteInputs": await requireAdmin(env, body.token); return adminWriteInputs(env, ctx, body.stateId, body.inputs);
@@ -652,7 +667,45 @@ async function adminInfo(env) {
   const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
   const settings = Object.fromEntries(results.map((r) => [r.key, r.value]));
   return { ok: true, serviceAccount: email, settings: { season: settings.season || "", start_year: settings.start_year || "1200", template: settings.template || "", admin_email: settings.admin_email || "",
-    engine_url: settings.engine_url || "" }, engineSecretSet: !!settings._engine_secret };
+    engine_url: settings.engine_url || "" }, engineSecretSet: !!settings._engine_secret, mcpKey: await mcpKey(env) };
+}
+
+/* ============================================================
+ * MCP: ключ доступа и мост к действиям сайта
+ * Адрес коннектора — <сервер>/mcp/<ключ>; ключ видит только админ («Управление»).
+ * ============================================================ */
+// без кэша в памяти: после «Новый адрес» старый ключ должен перестать работать во всех копиях воркера сразу
+const mcpKey = (env) => loadServerSecret(env, "mcp_key");
+
+async function adminMcpRotate(env) {
+  await env.DB.prepare("UPDATE settings SET value = ? WHERE key = '_mcp_key'").bind(toHex(crypto.getRandomValues(new Uint8Array(24)))).run();
+  return { ok: true, mcpKey: await mcpKey(env) };
+}
+
+function mcpApi(env, ctx, request) {
+  let token = null;
+  const adminToken = async () => (token = token || (await makeToken(env, { role: "admin", login: "mcp" })));
+  return {
+    // любое действие сайта с правами администратора: те же проверки, журнал правок и откат
+    async call(action, body = {}) {
+      const r = await handlePost({ ...body, action, token: await adminToken() }, env, ctx, request);
+      return r instanceof RawJSON ? JSON.parse(r.text) : r;
+    },
+    public: async () => withFreeze(env, await publicPayload(env, ctx)),
+    marks: () => mapMarks(env),
+    // точка города провинции (или подписи провинции) для меток «рядом с провинцией»
+    async provincePoint(stateId, province) {
+      await ensureProvinceTable(env);
+      const row = await env.DB.prepare("SELECT data FROM provinces WHERE state_id = ?").bind(String(stateId || "").toLowerCase()).first();
+      let p = null; try { p = row ? JSON.parse(row.data) : null; } catch { p = null; }
+      if (!p) return null;
+      const pts = [...(p.towns || []), ...(p.labels || [])].filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y));
+      if (!pts.length) return null;
+      const want = String(province || "").trim().toLowerCase();
+      if (!want) return pts[0];
+      return pts.find((t) => String(t.name || "").toLowerCase() === want) || pts.find((t) => String(t.name || "").toLowerCase().includes(want)) || null;
+    },
+  };
 }
 
 async function adminSaveSettings(env, st) {

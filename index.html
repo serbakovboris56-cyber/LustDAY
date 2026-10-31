@@ -12,7 +12,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <!-- ?v= меняется при обновлении сайта, чтобы браузер не держал старые скрипты -->
-<link rel="stylesheet" href="assets/app.css?v=20261030-1">
+<link rel="stylesheet" href="assets/app.css?v=20261031-1">
 </head>
 <body>
 <header class="bar">
@@ -155,6 +155,13 @@
       <p class="admin__wide login__hint" id="saInfo"></p>
       <div class="admin__wide admin__links"><button class="btn btn--ghost" type="submit">Сохранить настройки</button> <button class="btn btn--ghost" type="button" id="enginePing">Проверить Движок</button></div>
     </form>
+
+    <div class="admin__add" id="adminMcp">
+      <h3>Подключение к Claude (MCP)</h3>
+      <label class="admin__wide">Адрес коннектора <input id="mcpUrl" type="text" readonly placeholder="появится после входа"></label>
+      <p class="admin__wide login__hint">claude.ai → «Настройки» → «Коннекторы» → «Добавить свой коннектор»: вставьте этот адрес. Claude сможет читать цифры, менять их, ставить галочки хода и метки карты. Адрес — как пароль администратора: не показывайте его игрокам. «Новый адрес» отключает старый.</p>
+      <div class="admin__wide admin__links"><button class="btn btn--ghost" type="button" id="mcpCopy">Скопировать</button> <button class="btn btn--ghost" type="button" id="mcpRotate">Новый адрес</button></div>
+    </div>
 
     <form id="adminPassword" class="admin__add">
       <h3>Пароль администратора</h3>
@@ -321,6 +328,6 @@
 <script src="assets/vector-map.js?v=20261030-1"></script>
 <script src="assets/territory-editor.js?v=20261030-1"></script>
 <script src="assets/map-layers.js?v=20261030-1"></script>
-<script src="assets/app.js?v=20261030-1"></script>
+<script src="assets/app.js?v=20261031-1"></script>
 </body>
 </html>
