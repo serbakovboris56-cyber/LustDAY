@@ -552,7 +552,8 @@ async function bordersETag(env) {
 async function bordersPayload(env) {
   await ensureProvinceTable(env);
   const [{ results }, prov] = await Promise.all([
-    env.DB.prepare("SELECT state_id, geometry FROM borders").all(),
+    // только государства из реестра: контур удалённого государства рисовался бы жёлтым «призраком»
+    env.DB.prepare("SELECT state_id, geometry FROM borders WHERE state_id IN (SELECT id FROM states)").all(),
     env.DB.prepare("SELECT state_id, data FROM provinces").all(),
   ]);
   const provById = new Map(prov.results.map((r) => [r.state_id, r.data]));
@@ -1135,12 +1136,16 @@ async function adminTerritoryRestore(env, versionId) {
   await ensureProvinceTable(env);
   const now = new Date().toISOString();
   const stmts = [env.DB.prepare("DELETE FROM borders"), env.DB.prepare("DELETE FROM provinces")];
+  // государства, удалённые после снятия версии, не возвращаются вместе с ней
+  const alive = new Set((await env.DB.prepare("SELECT id FROM states").all()).results.map((r) => r.id));
+  for (const id of Object.keys(snap.borders || {})) if (!alive.has(id)) delete snap.borders[id];
+  for (const id of Object.keys(snap.provinces || {})) if (!alive.has(id)) delete snap.provinces[id];
   for (const [id, g] of Object.entries(snap.borders || {})) stmts.push(env.DB.prepare("INSERT INTO borders (state_id, geometry, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(g), now));
   for (const [id, p] of Object.entries(snap.provinces || {})) stmts.push(env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(p), now));
   await env.DB.batch(stmts);   // одна транзакция: карта не останется наполовину старой
   if (snap.grid) await env.KV.put("territory_grid", JSON.stringify(snap.grid)); else await env.KV.delete("territory_grid");
   const when = new Date(v.created).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-  await saveTerritoryVersion(env, `Откат к версии от ${when}`, { states: Object.keys(snap.borders || {}), text });
+  await saveTerritoryVersion(env, `Откат к версии от ${when}`, await currentTerritories(env, snap.grid ? JSON.stringify(snap.grid) : null));
   return { ok: true };
 }
 
@@ -1167,7 +1172,10 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
     if (p) stmts.push(env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET data=?2, updated=?3").bind(id, JSON.stringify(p), now));
     else stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(id));
   }
-  if (stmts.length) await env.DB.batch(stmts);
+  // контуры и провинции удалённых государств: кисть их больше не присылает, и без этой чистки они жили вечно
+  stmts.push(env.DB.prepare("DELETE FROM borders WHERE state_id NOT IN (SELECT id FROM states)"));
+  stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id NOT IN (SELECT id FROM states)"));
+  await env.DB.batch(stmts);
   await saveTerritoryVersion(env, "Сохранение кисти", await currentTerritories(env, gridText)).catch((e) => console.error(e));
   return { ok: true };
 }
