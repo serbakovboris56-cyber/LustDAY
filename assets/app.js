@@ -748,6 +748,7 @@
       f.engine_url.value = info.settings.engine_url || "";
       f.engine_secret.value = "";
       f.engine_secret.placeholder = info.engineSecretSet ? "задан — впишите, чтобы заменить" : "из журнала setupEngine";
+      showMcpUrl(info.mcpKey);
       $("#saInfo").textContent = info.serviceAccount ? `Робот Google: ${info.serviceAccount}. Откройте ему шаблон и таблицы государств с правом «Редактор».` : "Ключ Google не задан.";
     } catch (err) { $("#saInfo").textContent = err.message; }
   }
@@ -757,6 +758,22 @@
       await api.admin("adminSaveSettings", { settings: Object.fromEntries(new FormData(e.target).entries()) });
       adminMsg("Настройки сохранены.");
       loadSettings();
+    } catch (err) { adminMsg(err.message, true); }
+  });
+
+  // адрес MCP-коннектора: сервер + /mcp/ + ключ
+  function showMcpUrl(key) { $("#mcpUrl").value = key ? `${API.replace(/\/+$/, "")}/mcp/${key}` : ""; }
+  $("#mcpCopy").addEventListener("click", async () => {
+    const v = $("#mcpUrl").value;
+    if (!v) return;
+    try { await navigator.clipboard.writeText(v); adminMsg("Адрес MCP скопирован."); } catch { $("#mcpUrl").select(); }
+  });
+  $("#mcpRotate").addEventListener("click", async () => {
+    if (DEMO) return;
+    try {
+      const r = await api.admin("adminMcpRotate");
+      showMcpUrl(r.mcpKey);
+      adminMsg("Новый адрес MCP готов. Старый больше не работает: замените его в настройках коннектора claude.ai.");
     } catch (err) { adminMsg(err.message, true); }
   });
 
