@@ -180,6 +180,7 @@
     }
     $("#marksEdit").addEventListener("click", () => {
       if (window.VPI_EDITING) { alert("Сначала закройте кисть территорий."); return; }
+      if (window.VPIMapRuler && window.VPIMapRuler.stop) window.VPIMapRuler.stop();   // линейка тоже ловит клики
       open();
     });
     $("#marksCancel").addEventListener("click", () => {

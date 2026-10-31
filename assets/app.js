@@ -141,6 +141,8 @@
     }
   }
   fitWorld();
+  // линейка масштаба внизу справа и кнопка измерения расстояния под зумом (assets/map-ruler.js)
+  const ruler = window.VPIMapRuler.create({ map, nativeZ: NATIVE_Z });
 
   function updateLabelSize() {
     const z = map.getZoom();
@@ -1498,6 +1500,7 @@
   /* ---------------- кисть территорий ---------------- */
   $("#brushBtn").addEventListener("click", () => {
     if (window.VPI_EDITING) return;
+    ruler.stop();                                   // линейка тоже перехватывает клики по карте
     window.VPI_EDITING = true;
     if (state.selected) closePanel();
     $("#brushBtn").disabled = true;
