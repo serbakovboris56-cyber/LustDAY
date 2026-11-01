@@ -72,7 +72,11 @@
           mk.on("click", (e) => { L.DomEvent.stopPropagation(e); pick(kind, m); });
           mk.on("dragend", () => { const p = map.project(mk.getLatLng(), nativeZ); m.x = Math.round(p.x); m.y = Math.round(p.y); dirty(); });
         } else {
-          mk.bindPopup(popupHtml(kind, m), { className: "mark-popup", closeButton: false, offset: [0, -44] });
+          // Описание с переносами строк (pre-wrap) Leaflet меряет по самому узкому слову,
+          // поэтому для длинного текста задаём минимальную ширину сами.
+          const len = (m.text || "").length;
+          const minWidth = len > 200 ? 380 : len > 80 ? 320 : len > 30 ? 240 : 0;
+          mk.bindPopup(popupHtml(kind, m), { className: "mark-popup", closeButton: false, offset: [0, -44], minWidth, maxWidth: 380 });
         }
         g.addLayer(mk);
       }

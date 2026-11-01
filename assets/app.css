@@ -524,9 +524,9 @@ button { font: inherit; color: inherit; }
 .mark.is-selected { filter: drop-shadow(0 0 4px var(--gold)) drop-shadow(0 0 2px var(--gold)); }
 .mark-pop__pin { height: 1.4em; vertical-align: -0.3em; }
 .mark-popup .leaflet-popup-content-wrapper, .mark-popup .leaflet-popup-tip { background: var(--ink); color: var(--gold); border: 1px solid var(--rule); border-radius: 2px; }
-.mark-popup .leaflet-popup-content { margin: 8px 12px; font: 14px/1.4 var(--sans); }
+.mark-popup .leaflet-popup-content { margin: 8px 12px; font: 14px/1.4 var(--sans); max-width: calc(100vw - 64px); }
 .mark-pop small { display: block; color: var(--gold-soft); }
-.mark-pop p { margin: 6px 0 0; max-width: 260px; white-space: pre-wrap; }
+.mark-pop p { margin: 6px 0 0; white-space: pre-wrap; }
 .marks-bar input, .marks-bar textarea { background: var(--banner); color: var(--gold); border: 1px solid var(--rule); padding: 6px 8px; font: inherit; }
 .marks-bar__text[hidden] { display: none; }
 .marks-bar__text textarea { width: 260px; resize: vertical; }
