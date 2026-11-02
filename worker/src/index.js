@@ -317,6 +317,7 @@ const RANGES = [
   "'Армия'!Q65",
   "'Модификаторы'!A5:E104",
   "'Статистика'!B3",
+  "'Расчёты'!A14:A18",   // названия сословий: у части рас своё (у Кан'Ни «Вампиры» вместо «Феодалы»)
 ];
 
 async function readSheetValues(env, sheetId) {
@@ -336,7 +337,7 @@ async function readSheetValues(env, sheetId) {
 }
 
 function parseLedger(vr, startYear) {
-  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows] = vr;
+  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows, estateRows = []] = vr;
   const raw = (r) => (calcRows[r - 1] || [])[0];
   const n = (r) => { const x = Number(raw(r)); return Number.isFinite(x) ? x : 0; };
   const s = (r) => String(raw(r) ?? "");
@@ -353,7 +354,7 @@ function parseLedger(vr, startYear) {
   const ledger = {
     turn, year: startYear + turn,
     population: round(n(13)), popGrowth: round(n(96)), popPct: round(n(95) * 100, 1),
-    estates: ESTATES.map((name, i) => ({ name, count: round(n(14 + i)), loyalty: round(n(59 + i)) })),
+    estates: ESTATES.map((name, i) => ({ name: String(cell(estateRows[i], 0)).trim() || name, count: round(n(14 + i)), loyalty: round(n(59 + i)) })),
     food: { production: round(n(21)), consumption: round(n(22)), surplus: round(n(23)) },
     craft: { income: round(n(26)) },
     coins: { income: round(n(31)), upkeep: round(n(32)), net: round(n(33)) },
