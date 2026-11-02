@@ -798,6 +798,7 @@ async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   if (!inp || typeof inp !== "object") return { ok: false, error: "Нет данных." };
   const data = inputsData(inp);
   if (!data.length) return { ok: false, error: "Нечего сохранять." };
+  await keepCrisisFormulas(env, r, data);
   // старые значения — для журнала правок и отката; без них запись всё равно идёт
   const before = await readInputs(env, r).catch(() => null);
   await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
@@ -807,6 +808,16 @@ async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   const snap = await refreshOneState(env, r.id);
   const s = snap.states.find((x) => x.id === r.id);
   return { ok: true, ledger: s && s.ledger, public: s && s.public, error: s && s.error ? "Записано, но чтение не удалось: " + s.error : undefined };
+}
+
+// Ручной кризис может быть формулой (у некромантов «Опустошение земель» включает лист «Некромантия»).
+// Такие ячейки не перезаписываем: null в values:batchUpdate оставляет ячейку как есть.
+async function keepCrisisFormulas(env, r, data) {
+  const block = data.find((d) => d.range === "'Расчёты'!B70:B73");
+  if (!block) return;
+  const res = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values/${encodeURIComponent("'Расчёты'!B70:B73")}?valueRenderOption=FORMULA`).catch(() => null);
+  const rows = (res && res.values) || [];
+  block.values = block.values.map((v, i) => (String((rows[i] && rows[i][0]) || "").startsWith("=") ? [null] : v));
 }
 
 // Ячейки для values:batchUpdate по присланным блокам ввода.
