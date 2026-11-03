@@ -267,6 +267,8 @@
         ${s.frozen != null ? `<span class="roster__flag" title="Заморожено с хода ${esc(s.frozen)}">заморожено</span>` : ""}
         ${cr.length ? `<span class="roster__flag roster__flag--crisis" title="Кризисы: ${esc(cr.join(", "))}">кризис${cr.length > 1 ? " ×" + cr.length : ""}</span>` : ""}
       </button></li>`; }).join("") || `<li class="roster__empty">Государств пока нет</li>`;
+    const n = state.data.states.length;
+    $("#rosterCount").textContent = n ? String(n) : "";
     if (state.selected) document.querySelectorAll("#rosterList button").forEach((b) => b.setAttribute("aria-current", String(b.dataset.id === state.selected)));
   }
 
