@@ -601,7 +601,8 @@
       ${r.login ? `<div class="admin__links"><button type="button" class="linklike" data-share="${esc(r.id)}">Скопировать для игрока</button></div>` : ""}`;
   }
   const mapLink = (id) => location.origin + location.pathname + "#" + id;
-  const shareText = (r) => `${r.name || r.id}\nЛогин: ${r.login}\nПароль: ${r.password}\nСтатистика: ${mapLink(r.id)}`;
+  const sheetLink = (r) => (r.sheetId ? `https://docs.google.com/spreadsheets/d/${r.sheetId}/edit` : "таблица ещё не привязана");
+  const shareText = (r) => `${r.name || r.id}\nЛогин: ${r.login}\nПароль: ${r.password}\nСтатистика: ${sheetLink(r)}\nКарта: ${mapLink(r.id)}`;
   async function copyText(text, okMsg) {
     try { await navigator.clipboard.writeText(text); adminMsg(okMsg); }
     catch {
@@ -668,7 +669,7 @@
       tg.textContent = shown ? "Показать" : "Скрыть";
     }
     const sh = e.target.closest("[data-share]");
-    if (sh) { const row = state.adminRows.find((r) => r.id === sh.dataset.share); copyText(shareText(row), `Скопировано для «${row.name || row.id}»: логин, пароль и ссылка на статистику.`); }
+    if (sh) { const row = state.adminRows.find((r) => r.id === sh.dataset.share); copyText(shareText(row), `Скопировано для «${row.name || row.id}»: логин, пароль, таблица и карта.`); }
     if (e.target.closest("[data-shareall]")) {
       const ready = state.adminRows.filter((r) => r.login && r.password != null);
       copyText(ready.map(shareText).join("\n\n"), `Скопированы логины, пароли и ссылки: ${ready.length}.`);

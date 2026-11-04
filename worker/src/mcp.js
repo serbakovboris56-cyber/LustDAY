@@ -74,7 +74,7 @@ const TOOLS = [
       const [st, pw] = await Promise.all([api.call("adminStates"), api.call("adminPasswords")]);
       const rows = st.states.filter((s) => !a.state_id || s.id === a.state_id).map((s) => ({
         id: s.id, name: s.name, login: s.login || null, hasPassword: s.hasPassword,
-        password: s.hasPassword ? (pw.passwords[s.id] ?? null) : null, map: api.siteUrl + "#" + s.id,
+        password: s.hasPassword ? (pw.passwords[s.id] ?? null) : null, sheet: s.sheetId ? `https://docs.google.com/spreadsheets/d/${s.sheetId}/edit` : null, map: api.siteUrl + "#" + s.id,
       }));
       return { ok: true, states: rows };
     },
