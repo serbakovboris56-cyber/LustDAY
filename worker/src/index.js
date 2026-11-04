@@ -1385,8 +1385,15 @@ async function runTurnJob(env, job) {
   try {
     const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
     if (!r || !r.sheet_id) throw new Error("у государства нет таблицы");
+    // запасы особых листов (вера, рабы, трупы…) снимаем ДО хода: после него номер хода и формулы уже другие
+    let carry = null, carryErr = "";
+    try { carry = await readCarry(env, r.sheet_id); } catch (e) { carryErr = String(e && e.message || e); }
     const d = await engineCall(env, { action: "apply", sheetId: r.sheet_id, expectedTurn: job.expected_turn });
-    if (d.ok) backup = d.backupUrl || "";
+    if (d.ok) {
+      backup = d.backupUrl || "";
+      if (!carryErr) { try { await writeCarry(env, r.sheet_id, carry); } catch (e) { carryErr = String(e && e.message || e); } }
+      if (carryErr) error = "ход применён, но особые листы не перенесены: " + carryErr;
+    }
     else if (d.code === "already" && Number(d.turn) === job.expected_turn) error = "ход уже был применён раньше";
     else { status = "error"; error = d.error || "ошибка Движка"; }
   } catch (e) { status = "error"; error = String(e && e.message || e); }
@@ -1396,6 +1403,68 @@ async function runTurnJob(env, job) {
   if (status === "done") stmts.push(missesStmt(env, job.state_id, job.had_order ? 0 : (job.misses_before || 0) + 1, now));
   await env.DB.batch(stmts);
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
+}
+
+/* ============================================================
+ * ПЕРЕНОС ОСОБЫХ ЛИСТОВ ПРИ «НОВОМ ХОДЕ»
+ * Лист особой механики (Некромантия, Зижи Де, Зелёный пакт, Ямы…) может держать блок в N1:O14:
+ *   N1 = «ПЕРЕНОС», ниже по строке на пару: N — куда (диапазон), O — откуда (диапазон того же размера).
+ * Диапазон без имени листа относится к этому же листу. Значения «откуда» читаются до хода (это итог
+ * хода, который видел игрок), после успешного хода записываются в «куда». Так запас на конец хода
+ * становится запасом на начало следующего, а ручные поля хода обнуляются. Откат хода возвращает
+ * и эти листы: Движок восстанавливает таблицу из копии целиком.
+ * ============================================================ */
+const STANDARD_SHEETS = new Set(["Статистика", "Армия", "Ресурсы", "Пантеон", "Журнал", "Стройки", "Расчёты", "Регионы", "Модификаторы",
+  "Хроника", "События", "Приказы", "Расы", "Расы_Контент", "Постройки"]);
+const CARRY_BLOCK = "N1:O14";
+const quoteSheet = (name) => "'" + String(name).replace(/'/g, "''") + "'";
+const qualify = (ref, sheet) => (String(ref).includes("!") ? String(ref).trim() : quoteSheet(sheet) + "!" + String(ref).trim());
+
+// «D16:F33» → {rows: 18, cols: 3}; одна ячейка → 1×1
+function rangeSize(ref) {
+  const a1 = String(ref).split("!").pop().replace(/\$/g, "");
+  const m = a1.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
+  if (!m) throw new HttpError("непонятный диапазон в блоке ПЕРЕНОС: " + ref);
+  const col = (x) => x.toUpperCase().split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  if (!m[3]) return { rows: 1, cols: 1 };
+  return { rows: Math.abs(Number(m[4]) - Number(m[2])) + 1, cols: Math.abs(col(m[3]) - col(m[1])) + 1 };
+}
+
+async function readCarry(env, sheetId) {
+  const meta = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}?fields=sheets.properties.title`);
+  const titles = (meta.sheets || []).map((x) => x.properties.title).filter((t) => !STANDARD_SHEETS.has(t));
+  if (!titles.length) return [];
+  const qs = titles.map((t) => "ranges=" + encodeURIComponent(quoteSheet(t) + "!" + CARRY_BLOCK)).join("&");
+  const blocks = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchGet?${qs}&valueRenderOption=FORMATTED_VALUE`);
+  const pairs = [];
+  (blocks.valueRanges || []).forEach((vr, i) => {
+    const rows = vr.values || [];
+    if (String((rows[0] || [])[0] || "").trim().toUpperCase() !== "ПЕРЕНОС") return;
+    rows.slice(1).forEach((row) => {
+      const to = String(row[0] || "").trim(), from = String(row[1] || "").trim();
+      if (!to || !from) return;
+      const a = rangeSize(to), b = rangeSize(from);
+      if (a.rows !== b.rows || a.cols !== b.cols) throw new HttpError(`ПЕРЕНОС на листе «${titles[i]}»: ${to} и ${from} разного размера`);
+      pairs.push({ to: qualify(to, titles[i]), from: qualify(from, titles[i]), ...a });
+    });
+  });
+  if (!pairs.length) return [];
+  const q2 = pairs.map((p) => "ranges=" + encodeURIComponent(p.from)).join("&");
+  const src = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchGet?${q2}&valueRenderOption=UNFORMATTED_VALUE`);
+  return pairs.map((p, i) => {
+    const got = (src.valueRanges[i] && src.valueRanges[i].values) || [];
+    // пустые хвосты Google не присылает: дополняем до размера, чтобы пустое значение стёрло старое
+    const values = Array.from({ length: p.rows }, (_, r) => Array.from({ length: p.cols }, (_, c) => {
+      const v = (got[r] || [])[c];
+      return v === undefined || v === null ? "" : v;
+    }));
+    return { range: p.to, values };
+  });
+}
+
+async function writeCarry(env, sheetId, data) {
+  if (!data || !data.length) return;
+  await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
 }
 
 // Догон после разморозки: Движок дописывает пустые ходы до expected_turn (engineSkip_ в Движок.gs).
