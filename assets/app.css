@@ -322,6 +322,7 @@ button { font: inherit; color: inherit; }
 .admin-table .muted { font-size: 12px; }
 .pw-form { display: flex; gap: 6px; }
 .pw-form input { width: 130px; }
+.pw-show code { font: 14px/1.4 ui-monospace, monospace; color: var(--gold); user-select: all; }
 .admin__add { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--rule); }
 .admin__add h3 { grid-column: 1 / -1; margin: 0; font: 700 18px/1.2 var(--serif); }
 .admin__wide { grid-column: 1 / -1; }
