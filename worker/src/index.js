@@ -94,6 +94,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminDeleteState": await requireAdmin(env, body.token); return adminDeleteState(env, body.stateId);
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
     case "adminPasswords": await requireAdmin(env, body.token); return adminPasswords(env);
+    case "adminResetAllPasswords": await requireAdmin(env, body.token); return adminResetAllPasswords(env, body.confirm);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
     case "adminMcpRotate": await requireAdmin(env, body.token); return adminMcpRotate(env);
@@ -675,6 +676,22 @@ async function adminSetPassword(env, stateId, pass) {
   if (!r.meta.changes) return { ok: false, error: "Государство не найдено." };
   await storePlayerPassword(env, stateId, pass);
   return { ok: true };
+}
+
+// Новые случайные пароли всем государствам с логином: старые перестают работать.
+const PASS_ABC = "abcdefghijkmnpqrstuvwxyz23456789";   // без l, o, 0, 1 — чтобы не путать при перепечатке
+const randomPassword = () => [...crypto.getRandomValues(new Uint8Array(10))].map((x) => PASS_ABC[x % PASS_ABC.length]).join("");
+async function adminResetAllPasswords(env, confirm) {
+  if (confirm !== true) return { ok: false, error: "Нужно подтверждение." };
+  const { results } = await env.DB.prepare("SELECT id FROM states WHERE login <> ''").all();
+  const updates = [];
+  for (const r of results) {
+    const pass = randomPassword(), salt = newSalt();
+    updates.push({ id: r.id, pass, stmt: env.DB.prepare("UPDATE states SET pass_hash = ?, salt = ? WHERE id = ?").bind(await hashPassword(env, pass, salt), salt, r.id) });
+  }
+  if (updates.length) await env.DB.batch(updates.map((u) => u.stmt));
+  for (const u of updates) await storePlayerPassword(env, u.id, u.pass);
+  return { ok: true, count: updates.length };
 }
 
 // Пароли игроков для «Управления»: { id: пароль | null }; null — задан до обновления и игрок с тех пор не входил.

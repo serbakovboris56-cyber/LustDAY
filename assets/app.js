@@ -617,7 +617,7 @@
     state.adminRows = rows;
     const ready = rows.filter((r) => r.login && r.password != null);
     $("#adminList").innerHTML = rows.length ? `
-      ${ready.length ? `<div class="admin__links"><button type="button" class="btn btn--ghost" data-shareall>Скопировать логины и пароли всех (${ready.length})</button></div>` : ""}
+      <div class="admin__links">${ready.length ? `<button type="button" class="btn btn--ghost" data-shareall>Скопировать логины и пароли всех (${ready.length})</button> ` : ""}<button type="button" class="btn btn--ghost" data-resetall>Новые пароли всем</button></div>
       <table class="admin-table">
         <thead><tr><th>Государство</th><th>Логин</th><th>Таблица</th><th>Новый пароль</th></tr></thead>
         <tbody>
@@ -635,6 +635,22 @@
     const from = $("#adminAdd").from, keep = from.value;
     from.innerHTML = rows.filter((r) => r.linked).map((r) => `<option value="${esc(r.id)}">${esc(r.name || r.id)}</option>`).join("");
     if (keep) from.value = keep;
+  }
+  // Первое нажатие спрашивает, второе задаёт всем случайные пароли и сразу копирует текст для рассылки.
+  async function resetAll(btn) {
+    if (!btn.dataset.armed) {
+      btn.dataset.armed = "1";
+      btn.textContent = "Точно? Старые пароли перестанут работать";
+      setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "Новые пароли всем"; } }, 6000);
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const r = await api.admin("adminResetAllPasswords", { confirm: true });
+      await openAdmin(true);
+      const ready = state.adminRows.filter((x) => x.login && x.password != null);
+      await copyText(ready.map(shareText).join("\n\n"), `Новые пароли заданы (${r.count}) и скопированы вместе с логинами и ссылками.`);
+    } catch (err) { adminMsg(err.message, true); btn.disabled = false; }
   }
   function setSource(value) {
     const f = $("#adminAdd");
@@ -657,6 +673,8 @@
       const ready = state.adminRows.filter((r) => r.login && r.password != null);
       copyText(ready.map(shareText).join("\n\n"), `Скопированы логины, пароли и ссылки: ${ready.length}.`);
     }
+    const ra = e.target.closest("[data-resetall]");
+    if (ra) resetAll(ra);
     const b = e.target.closest("[data-stats]");
     if (b) { const row = state.adminRows && state.adminRows.find((r) => r.id === b.dataset.stats); openStats(b.dataset.stats, row && row.sheetId); }
     const d = e.target.closest("[data-delete]");
