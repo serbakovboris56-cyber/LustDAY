@@ -93,6 +93,7 @@ async function handlePost(body, env, ctx, request) {
     case "adminSaveState": await requireAdmin(env, body.token); return adminSaveState(env, body.state);
     case "adminDeleteState": await requireAdmin(env, body.token); return adminDeleteState(env, body.stateId);
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
+    case "adminPasswords": await requireAdmin(env, body.token); return adminPasswords(env);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
     case "adminMcpRotate": await requireAdmin(env, body.token); return adminMcpRotate(env);
@@ -165,6 +166,34 @@ async function hashPassword(env, password, salt) {
   return toHex(await crypto.subtle.sign("HMAC", await pepperKey(env), enc.encode(salt + "|" + password)));
 }
 const newSalt = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
+
+// Пароли игроков в обратимом виде — только чтобы админ мог их посмотреть и переслать игроку.
+// Вход по-прежнему сверяет хеш; здесь AES-GCM с ключом PASS_KEY (секрет воркера) или своим ключом сервера в D1.
+// Отдельная таблица: в общий список государств (и в MCP) пароли не попадают.
+async function ensurePassTable(env) {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS state_passwords (state_id TEXT PRIMARY KEY, enc TEXT NOT NULL, updated TEXT NOT NULL)").run();
+}
+let passKeyCache = null;
+async function passKey(env) {
+  if (passKeyCache) return passKeyCache;
+  const seed = env.PASS_KEY || (await serverSecret(env, "pass_key"));
+  const raw = await crypto.subtle.digest("SHA-256", enc.encode(seed + "|vpi-pass"));
+  passKeyCache = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return passKeyCache;
+}
+async function storePlayerPassword(env, stateId, password) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await passKey(env), enc.encode(password));
+  await ensurePassTable(env);
+  await env.DB.prepare("INSERT INTO state_passwords (state_id, enc, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET enc=?2, updated=?3")
+    .bind(stateId, b64url(iv) + "." + b64url(ct), new Date().toISOString()).run();
+}
+async function readPlayerPassword(env, encText) {
+  try {
+    const [iv, ct] = String(encText).split(".");
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64url(iv) }, await passKey(env), fromB64url(ct)));
+  } catch { return null; }   // ключ сменили: пароль надо задать заново
+}
 
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false;
@@ -245,7 +274,10 @@ async function login(env, loginRaw, passwordRaw, request) {
 
   const st = await env.DB.prepare("SELECT id, pass_hash, salt FROM states WHERE lower(login) = ? AND login <> ''").bind(loginName).first();
   if (!st || !st.pass_hash) { await hashPassword(env, password, "dummy"); return failed(); }   // одинаковое время ответа
-  return timingSafeEqual(await hashPassword(env, password, st.salt), st.pass_hash) ? passed({ role: "player", stateId: st.id, login: loginName }) : failed();
+  if (!timingSafeEqual(await hashPassword(env, password, st.salt), st.pass_hash)) return failed();
+  // пароль, заданный до появления обратимой копии, становится виден админу после первого входа игрока
+  try { await storePlayerPassword(env, st.id, password); } catch { /* вход важнее */ }
+  return passed({ role: "player", stateId: st.id, login: loginName });
 }
 
 // Продление входа: сайт присылает сохранённый токен при открытии и получает свежий на TOKEN_DAYS дней.
@@ -620,13 +652,14 @@ async function adminSaveState(env, st) {
 
 async function adminDeleteState(env, stateId) {
   stateId = String(stateId || "");
-  await Promise.all([ensureProvinceTable(env), ensureSnapshotTable(env)]);
+  await Promise.all([ensureProvinceTable(env), ensureSnapshotTable(env), ensurePassTable(env)]);
   // из снимка — сразу, иначе государство висело бы на сайте до следующего сбора цифр
   const r = await env.DB.batch([
     env.DB.prepare("DELETE FROM states WHERE id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM snapshot_states WHERE state_id = ?").bind(stateId),
+    env.DB.prepare("DELETE FROM state_passwords WHERE state_id = ?").bind(stateId),
   ]);
   if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
   await clearOrders(env, stateId);   // новое государство с тем же ID не должно унаследовать пропуски и заморозку
@@ -640,7 +673,18 @@ async function adminSetPassword(env, stateId, pass) {
   const salt = newSalt();
   const r = await env.DB.prepare("UPDATE states SET pass_hash = ?, salt = ? WHERE id = ?").bind(await hashPassword(env, pass, salt), salt, stateId).run();
   if (!r.meta.changes) return { ok: false, error: "Государство не найдено." };
+  await storePlayerPassword(env, stateId, pass);
   return { ok: true };
+}
+
+// Пароли игроков для «Управления»: { id: пароль | null }; null — задан до обновления и игрок с тех пор не входил.
+async function adminPasswords(env) {
+  await ensurePassTable(env);
+  const { results } = await env.DB.prepare(`SELECT s.id, p.enc FROM states s LEFT JOIN state_passwords p ON p.state_id = s.id
+      WHERE s.pass_hash IS NOT NULL AND s.pass_hash <> ''`).all();
+  const passwords = {};
+  for (const r of results) passwords[r.id] = r.enc ? await readPlayerPassword(env, r.enc) : null;
+  return { ok: true, passwords };
 }
 
 // Свой пароль администратора: строка в admins заменяет секрет ADMIN_PASSWORD для этого логина,
@@ -693,6 +737,7 @@ function mcpApi(env, ctx, request) {
       const r = await handlePost({ ...body, action, token: await adminToken() }, env, ctx, request);
       return r instanceof RawJSON ? JSON.parse(r.text) : r;
     },
+    siteUrl: String(env.SITE_URL || "https://serbakovboris56-cyber.github.io/LustDAY/").replace(/#.*$/, ""),
     public: async () => withFreeze(env, await publicPayload(env, ctx)),
     marks: () => mapMarks(env),
     // точка города провинции (или подписи провинции) для меток «рядом с провинцией»

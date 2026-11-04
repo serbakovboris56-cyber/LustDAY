@@ -67,6 +67,32 @@ const TOOLS = [
     },
   },
   {
+    name: "vpi_list_passwords", title: "Логины и пароли игроков", annotations: RO,
+    description: "Логин, пароль и ссылка на карту каждого государства — только для админа. Пароль null: задан до того, как сайт начал его запоминать (появится после входа игрока или после нового пароля в «Управлении»). Не показывайте пароль одного государства игрокам других государств.",
+    inputSchema: obj({ state_id: { ...stateId, description: "Необязательно: только это государство." } }),
+    run: async (a, api) => {
+      const [st, pw] = await Promise.all([api.call("adminStates"), api.call("adminPasswords")]);
+      const rows = st.states.filter((s) => !a.state_id || s.id === a.state_id).map((s) => ({
+        id: s.id, name: s.name, login: s.login || null, hasPassword: s.hasPassword,
+        password: s.hasPassword ? (pw.passwords[s.id] ?? null) : null, map: api.siteUrl + "#" + s.id,
+      }));
+      return { ok: true, states: rows };
+    },
+  },
+  {
+    name: "vpi_set_password", title: "Новый пароль игрока", annotations: DANGER,
+    description: "Задаёт игроку государства новый пароль (старый перестаёт работать). Без password придумывает случайный. Возвращает логин, пароль и ссылку. Только по явной просьбе админа.",
+    inputSchema: obj({ state_id: stateId, password: { type: "string", description: "Необязательно: свой пароль, от 6 символов." } }, ["state_id"]),
+    run: async (a, api) => {
+      const ABC = "abcdefghijkmnpqrstuvwxyz23456789";
+      const password = a.password || [...crypto.getRandomValues(new Uint8Array(10))].map((x) => ABC[x % ABC.length]).join("");
+      const r = await api.call("adminSetPassword", { stateId: a.state_id, password });
+      if (!r.ok) return r;
+      const st = (await api.call("adminStates")).states.find((s) => s.id === a.state_id) || {};
+      return { ok: true, id: a.state_id, name: st.name, login: st.login || null, password, map: api.siteUrl + "#" + a.state_id };
+    },
+  },
+  {
     name: "vpi_world_overview", title: "Обзор мира", annotations: RO,
     description: "Публичные цифры всех государств, как их видят игроки на сайте: население, армия, казна в общем виде, заморозка. Без кризисов и закрытых данных.",
     inputSchema: obj({}),

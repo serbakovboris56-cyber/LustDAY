@@ -577,10 +577,13 @@
     try {
       let rows;
       if (DEMO) {
-        rows = state.data.states.map((s) => ({ ...s, login: s.id === "arn" ? "demo" : "", hasPassword: s.id === "arn", linked: true, active: true, error: "" }));
+        rows = state.data.states.map((s) => ({ ...s, login: s.id === "arn" ? "demo" : "", hasPassword: s.id === "arn", password: s.id === "arn" ? "demo" : null, linked: true, active: true, error: "" }));
         if (keepMsg !== true) adminMsg("Демо-режим: изменения не сохранятся, пока сайт не подключён к серверу.");
       } else {
-        rows = (await api.admin("adminStates")).states;
+        // пароли — отдельным запросом: старый сервер без него не должен ломать список
+        const [st, pw] = await Promise.all([api.admin("adminStates"), api.admin("adminPasswords").catch(() => null)]);
+        const known = (pw && pw.passwords) || {};
+        rows = st.states.map((r) => ({ ...r, password: known[r.id] ?? null }));
       }
       renderAdminList(rows);
     } catch (err) {
@@ -590,16 +593,38 @@
     const used = new Set(states.map((x) => String(x.color).toUpperCase()));
     $("#adminAdd").color.value = PALETTE.find((c) => !used.has(c)) || PALETTE[states.length % PALETTE.length];
   }
+  // Пароль игрока виден только админу: скрыт точками до нажатия «Показать».
+  function loginCell(r) {
+    if (!r.hasPassword) return `<div class="muted">пароля нет</div>`;
+    if (r.password == null) return `<div class="muted">пароль неизвестен: задан раньше, чем сайт начал его запоминать. Появится после входа игрока, или задайте новый справа</div>`;
+    return `<div class="pw-show"><code data-pw="${esc(r.id)}">••••••</code> <button type="button" class="linklike" data-pwtoggle="${esc(r.id)}">Показать</button></div>
+      ${r.login ? `<div class="admin__links"><button type="button" class="linklike" data-share="${esc(r.id)}">Скопировать для игрока</button></div>` : ""}`;
+  }
+  const mapLink = (id) => location.origin + location.pathname + "#" + id;
+  const shareText = (r) => `${r.name || r.id}\nЛогин: ${r.login}\nПароль: ${r.password}\nСтатистика: ${mapLink(r.id)}`;
+  async function copyText(text, okMsg) {
+    try { await navigator.clipboard.writeText(text); adminMsg(okMsg); }
+    catch {
+      // без доступа к буферу (старый браузер, http) — через скрытое поле
+      const t = document.createElement("textarea");
+      t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+      $("#adminDialog").append(t); t.select();
+      const ok = document.execCommand("copy"); t.remove();
+      adminMsg(ok ? okMsg : "Не удалось скопировать: браузер не дал доступа к буферу обмена.", !ok);
+    }
+  }
   function renderAdminList(rows) {
     state.adminRows = rows;
+    const ready = rows.filter((r) => r.login && r.password != null);
     $("#adminList").innerHTML = rows.length ? `
+      ${ready.length ? `<div class="admin__links"><button type="button" class="btn btn--ghost" data-shareall>Скопировать логины и пароли всех (${ready.length})</button></div>` : ""}
       <table class="admin-table">
         <thead><tr><th>Государство</th><th>Логин</th><th>Таблица</th><th>Новый пароль</th></tr></thead>
         <tbody>
           ${rows.map((r) => `
             <tr>
               <td><span class="swatch" style="background:${esc(r.color)}"></span> ${esc(r.name || r.id)}<div class="muted">${esc(r.id)}${r.active ? "" : ", скрыто"}</div></td>
-              <td>${esc(r.login || "—")}<div class="muted">${r.hasPassword ? "пароль задан" : "пароля нет"}</div></td>
+              <td>${esc(r.login || "—")}${loginCell(r)}</td>
               <td class="${r.error ? "balance--deficit" : "balance--surplus"}">${esc(r.error || (r.linked ? "данные получены" : "нет ссылки"))}
                 ${r.linked ? `<div class="admin__links"><button type="button" class="linklike" data-stats="${esc(r.id)}">Цифры</button> <button type="button" class="linklike" data-copy="${esc(r.id)}">Копия</button>${r.sheetId ? ` <a href="https://docs.google.com/spreadsheets/d/${esc(r.sheetId)}/edit" target="_blank" rel="noopener">Таблица</a>` : ""}</div>` : ""}
                 <div class="admin__links"><button type="button" class="linklike linklike--danger" data-delete="${esc(r.id)}">Удалить</button></div></td>
@@ -619,6 +644,19 @@
   }
   $("#adminBtn").addEventListener("click", () => openAdmin());
   $("#adminList").addEventListener("click", (e) => {
+    const tg = e.target.closest("[data-pwtoggle]");
+    if (tg) {
+      const code = $(`[data-pw="${CSS.escape(tg.dataset.pwtoggle)}"]`), row = state.adminRows.find((r) => r.id === tg.dataset.pwtoggle);
+      const shown = tg.textContent === "Скрыть";
+      code.textContent = shown ? "••••••" : row.password;
+      tg.textContent = shown ? "Показать" : "Скрыть";
+    }
+    const sh = e.target.closest("[data-share]");
+    if (sh) { const row = state.adminRows.find((r) => r.id === sh.dataset.share); copyText(shareText(row), `Скопировано для «${row.name || row.id}»: логин, пароль и ссылка на статистику.`); }
+    if (e.target.closest("[data-shareall]")) {
+      const ready = state.adminRows.filter((r) => r.login && r.password != null);
+      copyText(ready.map(shareText).join("\n\n"), `Скопированы логины, пароли и ссылки: ${ready.length}.`);
+    }
     const b = e.target.closest("[data-stats]");
     if (b) { const row = state.adminRows && state.adminRows.find((r) => r.id === b.dataset.stats); openStats(b.dataset.stats, row && row.sheetId); }
     const d = e.target.closest("[data-delete]");
