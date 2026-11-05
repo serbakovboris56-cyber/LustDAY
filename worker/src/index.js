@@ -351,6 +351,8 @@ const RANGES = [
   "'Модификаторы'!A5:E104",
   "'Статистика'!B3",
   "'Расчёты'!A14:C18",   // своё название сословия берётся только у сословия с пометкой «без прироста» в C (вампиры Кан'Ни и Сайби'Рэ)
+  "'Армия'!C86:D95",     // флот: C корабль, D численность
+  "'Армия'!J86:M105",    // склад снаряжения: J вид, K предмет, M на складе
 ];
 
 async function readSheetValues(env, sheetId) {
@@ -370,7 +372,7 @@ async function readSheetValues(env, sheetId) {
 }
 
 function parseLedger(vr, startYear) {
-  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows, estateRows = []] = vr;
+  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows, estateRows = [], fleetRows = [], depotRows = []] = vr;
   const raw = (r) => (calcRows[r - 1] || [])[0];
   const n = (r) => { const x = Number(raw(r)); return Number.isFinite(x) ? x : 0; };
   const s = (r) => String(raw(r) ?? "");
@@ -400,6 +402,8 @@ function parseLedger(vr, startYear) {
     clerics: { stock: round(n(105), 2), income: round(n(103), 2), end: round(n(106), 2), threat: s(107) },
     levy: { specialists: round(n(42)), rabble: round(n(43)), inRanks: round(n(112)) },
     armyPower: round(num(cell(armyRows[0], 0))),
+    fleet: fleetRows.map((r) => ({ name: String(cell(r, 0)).trim(), count: round(num(cell(r, 1))) })).filter((x) => x.name && x.count > 0),
+    depot: depotRows.map((r) => ({ kind: String(cell(r, 0)).trim(), name: String(cell(r, 1)).trim(), stock: round(num(cell(r, 3))) })).filter((x) => x.name && x.stock > 0),
     resources: RESOURCE_NAMES.map((name, i) => ({ name, count: num(cell(resRows[i], 0)) })),
     crises: CRISIS_NAMES.filter((_, i) => s(67 + i) === "ДА"),
     regions,

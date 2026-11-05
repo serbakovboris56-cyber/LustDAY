@@ -849,11 +849,15 @@ const TRAIN_LIST = [["Новобранцы", 1], ["Обученные", 1.25], [
 const WEAPON_LIST = ["Древковое", "Одноручное", "Двуручное", "Ударно-дробящее", "Лёгкое дистанц.", "Тяжёлое дистанц.", "Огнестрельное"];
 const UNIT_STATES = ["В гарнизоне", "В походе", "Идёт сбор", "В обозе", "Разбит"];
 const ARMY_WIDTHS = [18, 50, 190, 95, 95, 105, 60, 60, 95, 110, 80, 125, 100, 60, 55, 90, 70, 75, 18];
+// Флот (слева, B:H) и склад снаряжения (справа, J:R) в строках 84-105, под справочником: старые строки листа не сдвигаются.
+const FLEET_ROW = 84, FLEET_FIRST = 86, FLEET_LAST = 95, FLEET_TOTAL = 96;
+const DEPOT_FIRST = 86, DEPOT_LAST = 105;
+const SHIP_LIST = ["Драккар", "Галера", "Когг", "Каравелла", "Каракка"];
 
 function fillArmySheet(ss) {
   const ws = ss.getSheetByName("Армия") || ss.insertSheet("Армия"); ws.setHiddenGridlines(true);
   ARMY_WIDTHS.forEach((w, i) => ws.setColumnWidth(i + 1, w));
-  paintParchment(ws, ARMY_REF_ROW + 12, 19);
+  paintParchment(ws, DEPOT_LAST + 2, 19);
   [[1, 14], [2, 18], [3, 44], [4, 14], [5, 22], [6, 40], [7, 22], [8, 14], [9, 26], [10, 22], [11, 22], [12, 14], [13, 26], [14, 24]].forEach(([r, h]) => ws.setRowHeight(r, h));
   const n = ARMY_LAST - ARMY_FIRST + 1, RNG = (col) => `${col}${ARMY_FIRST}:${col}${ARMY_LAST}`;
   const rules = [];
@@ -956,7 +960,63 @@ function fillArmySheet(ss) {
   });
   ws.getRange(ARMY_REF_ROW + 1, 4, ARMY_TYPES.length, 1).setBackground(C.panel).setFontFamily(FONT_TITLE).setFontSize(8).setFontWeight("bold");
   stCell(ws, ARMY_REF_ROW + 10, 3, 11, "Дух: мощь × (0,5 + дух/200) — от ×0,5 при 0% до ×1 при 100%; пустой дух считается как 50%. Оружие пока на мощь не влияет.", { size: 10, color: C.muted });
+  fillFleetAndDepot(ws);
   ws.setConditionalFormatRules(rules);
+}
+
+// Флот и склад снаряжения на листе «Армия». Можно вызвать отдельно на готовой таблице: старые строки не трогает.
+function fillFleetAndDepot(ws) {
+  ws = ws || SS_().getSheetByName("Армия"); if (!ws) return;
+  const head = (r, c, nc, t) => stCell(ws, r, c, nc, t, { font: FONT_TITLE, size: 8, bold: true, color: C.muted, valign: "bottom" });
+  const nf = FLEET_LAST - FLEET_FIRST + 1, nd = DEPOT_LAST - DEPOT_FIRST + 1;
+  ws.setRowHeight(FLEET_ROW, 26); ws.setRowHeight(FLEET_ROW + 1, 24);
+  ws.setRowHeights(FLEET_FIRST, DEPOT_LAST - FLEET_FIRST + 1, 26);
+
+  // ---------- ФЛОТ: тип корабля и численность; у особых ещё описание ----------
+  setPanel(ws, FLEET_ROW, 2, FLEET_TOTAL - FLEET_ROW + 1, 7);
+  stCell(ws, FLEET_ROW, 2, 7, "ФЛОТ", { font: FONT_TITLE, size: 11, bold: true, color: C.gold });
+  head(FLEET_ROW + 1, 3, 1, "КОРАБЛЬ"); head(FLEET_ROW + 1, 4, 1, "ЧИСЛЕННОСТЬ"); head(FLEET_ROW + 1, 5, 4, "ОПИСАНИЕ (ДЛЯ ОСОБЫХ)");
+  ws.getRange(FLEET_ROW + 1, 4).setHorizontalAlignment("center");
+  ws.getRange(FLEET_ROW + 1, 2, 1, 7).setBorder(null, null, true, null, null, null, C.rule, SpreadsheetApp.BorderStyle.SOLID);
+  ws.getRange(FLEET_ROW + 1, 5).setNote("Особый корабль должен быть хорошо расписан: размер, мачты, экипаж, вместимость, может ли заходить в реки и выходить в океан. Не расписанное вердер вправе додумать.");
+  const rows = [];
+  for (let i = 0; i < nf; i++) rows.push(i < SHIP_LIST.length ? [SHIP_LIST[i], 0, ""] : ["Особое", 0, ""]);
+  ws.getRange(FLEET_FIRST, 3, nf, 3).setValues(rows);
+  for (let r = FLEET_FIRST; r <= FLEET_LAST; r++) ws.getRange(r, 5, 1, 4).merge();
+  ws.getRange(FLEET_FIRST, 2, nf, 7).setFontFamily(FONT_BODY).setFontSize(11).setFontColor(C.text).setVerticalAlignment("middle")
+    .setBorder(null, null, null, null, false, true, C.brown, SpreadsheetApp.BorderStyle.SOLID);
+  ws.getRange(FLEET_FIRST, 3, nf, 1).setFontWeight("bold");
+  ws.getRange(FLEET_FIRST, 4, nf, 1).setFontFamily(FONT_TITLE).setFontSize(12).setFontColor(C.gold).setHorizontalAlignment("center").setNumberFormat("#,##0").setBackground(C.input)
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(true).build());
+  const sp = nf - SHIP_LIST.length;
+  if (sp > 0) {
+    ws.getRange(FLEET_FIRST + SHIP_LIST.length, 3, sp, 1).setBackground(C.input);
+    ws.getRange(FLEET_FIRST + SHIP_LIST.length, 5, sp, 4).setFontSize(10).setFontColor(C.muted).setBackground(C.input).setWrap(true);
+  }
+  stCell(ws, FLEET_TOTAL, 3, 1, "ИТОГО", { font: FONT_TITLE, size: 9, bold: true, color: C.gold });
+  stCell(ws, FLEET_TOTAL, 4, 1, `=SUM(D${FLEET_FIRST}:D${FLEET_LAST})`, { font: FONT_TITLE, size: 12, bold: true, color: C.gold, align: "center", fmt: "#,##0" });
+  ws.getRange(FLEET_TOTAL, 2, 1, 7).setBorder(true, null, null, null, null, null, C.rule, SpreadsheetApp.BorderStyle.SOLID);
+
+  // ---------- СКЛАД СНАРЯЖЕНИЯ: вид, предмет, сколько лежит ----------
+  setPanel(ws, FLEET_ROW, 10, DEPOT_LAST - FLEET_ROW + 1, 9);
+  stCell(ws, FLEET_ROW, 10, 9, "СКЛАД СНАРЯЖЕНИЯ", { font: FONT_TITLE, size: 11, bold: true, color: C.gold });
+  head(FLEET_ROW + 1, 10, 1, "ВИД"); head(FLEET_ROW + 1, 11, 2, "ПРЕДМЕТ"); head(FLEET_ROW + 1, 13, 1, "НА СКЛАДЕ"); head(FLEET_ROW + 1, 14, 5, "ПРИМЕЧАНИЕ");
+  ws.getRange(FLEET_ROW + 1, 13).setHorizontalAlignment("center")
+    .setNote("Снаряжение, что лежит на складе и ещё не выдано. Когда отряд вооружают, выданное вычитается отсюда вручную.");
+  ws.getRange(FLEET_ROW + 1, 10, 1, 9).setBorder(null, null, true, null, null, null, C.rule, SpreadsheetApp.BorderStyle.SOLID);
+  const items = ARMOR_LIST.slice(1).map(a => ["Броня", a[0]]).concat(WEAPON_LIST.map(w => ["Оружие", w]), [["Кони", "Боевые кони"]]);
+  const drows = [];
+  for (let i = 0; i < nd; i++) drows.push(items[i] ? [items[i][0], items[i][1], "", 0] : ["Особое", "", "", ""]);
+  ws.getRange(DEPOT_FIRST, 10, nd, 4).setValues(drows);
+  for (let r = DEPOT_FIRST; r <= DEPOT_LAST; r++) { ws.getRange(r, 11, 1, 2).merge(); ws.getRange(r, 14, 1, 5).merge(); }
+  ws.getRange(DEPOT_FIRST, 10, nd, 9).setFontFamily(FONT_BODY).setFontSize(11).setFontColor(C.text).setVerticalAlignment("middle")
+    .setBorder(null, null, null, null, false, true, C.brown, SpreadsheetApp.BorderStyle.SOLID);
+  ws.getRange(DEPOT_FIRST, 10, nd, 1).setFontFamily(FONT_TITLE).setFontSize(9).setFontColor(C.muted);
+  ws.getRange(DEPOT_FIRST, 11, nd, 1).setFontWeight("bold");
+  ws.getRange(DEPOT_FIRST, 13, nd, 1).setFontFamily(FONT_TITLE).setFontSize(12).setFontColor(C.gold).setHorizontalAlignment("center").setNumberFormat("#,##0").setBackground(C.input)
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(true).build());
+  ws.getRange(DEPOT_FIRST, 14, nd, 5).setFontSize(10).setFontColor(C.muted).setBackground(C.input);
+  if (nd > items.length) ws.getRange(DEPOT_FIRST + items.length, 11, nd - items.length, 2).setBackground(C.input);
 }
 
 // Состав войска (цветная полоса и легенда), расшифровка мощи отрядов и пояснения плашек.

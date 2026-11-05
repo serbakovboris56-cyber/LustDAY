@@ -465,6 +465,16 @@
       </section>
 
       <section class="section">
+        <h3>Флот</h3>
+        ${(L_.fleet || []).length ? `<dl class="facts facts--tight">${L_.fleet.map((s) => `<dt>${esc(s.name)}</dt><dd>${fmt(s.count)}</dd>`).join("")}</dl>` : `<p class="muted">Кораблей нет.</p>`}
+      </section>
+
+      <section class="section">
+        <h3>Склад снаряжения</h3>
+        ${(L_.depot || []).length ? `<dl class="facts facts--tight">${L_.depot.map((d) => `<dt>${esc(d.name)}</dt><dd>${fmt(d.stock)}</dd>`).join("")}</dl>` : `<p class="muted">Склад пуст.</p>`}
+      </section>
+
+      <section class="section">
         <h3>Ресурсы</h3>
         ${res.length ? `<ul class="chips">${res.map((r) => `<li>${esc(r.name)}${r.count > 1 ? ` ×${r.count}` : ""}</li>`).join("")}</ul>` : `<p class="muted">Источников ресурсов нет.</p>`}
       </section>
