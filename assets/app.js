@@ -141,20 +141,6 @@
     }
   }
   fitWorld();
-  // Края карты: мир круглый, карта замкнута слева направо. Пунктир показывает, откуда считать путь через край.
-  (function drawWorldEdges() {
-    map.createPane("worldEdges").style.zIndex = 450;
-    map.getPane("worldEdges").style.pointerEvents = "none";
-    const edge = { pane: "worldEdges", color: "#E0B84A", weight: 2, opacity: 0.85, dashArray: "10 8", interactive: false };
-    const tag = (x, text, side) => L.marker(toLatLng(x, MAP_H / 2), {
-      pane: "worldEdges", interactive: false, keyboard: false,
-      icon: L.divIcon({ className: "world-edge-label world-edge-" + side, html: "<span>" + text + "</span>", iconSize: [0, 0] }),
-    }).addTo(map);
-    L.polyline([toLatLng(0, 0), toLatLng(0, MAP_H)], edge).addTo(map);
-    L.polyline([toLatLng(MAP_W, 0), toLatLng(MAP_W, MAP_H)], edge).addTo(map);
-    tag(0, "Западный край мира<br>← продолжение у восточного края", "west");
-    tag(MAP_W, "Восточный край мира<br>продолжение у западного края →", "east");
-  })();
   // линейка масштаба внизу справа и кнопка измерения расстояния под зумом (assets/map-ruler.js)
   const ruler = window.VPIMapRuler.create({ map, nativeZ: NATIVE_Z });
 

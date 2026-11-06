@@ -578,10 +578,3 @@ button { font: inherit; color: inherit; }
   background: rgba(0, 0, 0, .78); border: 1px solid var(--rule); color: var(--gold);
   font-size: 13px; text-align: center; pointer-events: none;
 }
-
-/* подписи пунктирных краёв карты (мир замкнут слева направо) */
-.world-edge-label { font-family: "Forum", Georgia, serif; font-size: 13px; line-height: 1.25; color: #E0B84A;
-  white-space: nowrap; text-shadow: 0 0 4px #000, 0 0 2px #000; pointer-events: none; }
-.world-edge-label span { position: absolute; top: 0; }
-.world-edge-west span { left: 10px; transform: translateY(-50%); }
-.world-edge-east span { right: 10px; transform: translateY(-50%); text-align: right; }
