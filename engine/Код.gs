@@ -172,7 +172,7 @@ function buildExtendedMenu() {
   ui.createMenu("Хроника").addItem("🆕 Инициализировать игру", "initGame").addSeparator().addItem("▶ Мастер хода", "openWizard").addItem("▷ Показать превью", "previewTurn").addSeparator()
     .addSubMenu(ui.createMenu("📋 Панели").addItem("👤 Панель игрока", "openPlayerPanel").addItem("👑 Панель админа", "openAdminPanel").addItem("🏰 Панель регионов", "openRegionsPanel"))
     .addSubMenu(ui.createMenu("🎲 События").addItem("Случайное событие", "rollEventFromMenu").addItem("Показать активные", "showActiveEvents"))
-    .addSubMenu(ui.createMenu("⚙ Настройки").addItem("Настройки автостройки", "openSettings").addItem("Экспорт состояния", "exportGame").addItem("Импорт состояния", "importGame").addItem("🔒 Защитить листы", "protectGame").addItem("🔓 Снять защиту", "unprotectGame"))
+    .addSubMenu(ui.createMenu("⚙ Настройки").addItem("Настройки автостройки", "openSettings").addItem("Экспорт состояния", "exportGame").addItem("Импорт состояния", "importGame").addItem("Подсказки к зданиям", "applyBuildingNotes").addItem("🔒 Защитить листы", "protectGame").addItem("🔓 Снять защиту", "unprotectGame"))
     .addSubMenu(ui.createMenu("⏰ Автоматизация").addItem("Настроить триггеры", "setupTriggers").addItem("Сделать бэкап сейчас", "monthlyBackup"))
     .addSeparator().addItem("⟲ Пересчитать всё", "recalcAll").addItem("ⓘ Обновить подсказки", "refreshAll").addItem("ⓘ Помощь", "showHelp").addToUi();
 }
@@ -583,6 +583,55 @@ function bldLayout() {
   return { rows, bands, last: r - 1 };
 }
 
+// Подсказки к зданиям (заметки при наведении на название и на «За 1 шт.»): что даёт здание и как считается.
+const BLD_NOTE_HEAD_H = "ЗА 1 ШТ.\nЕда, ремесло, торговля, Клирика: сколько даёт ОДНО здание.\nПроценты (военные и инфраструктура): ПОЛНЫЙ бонус, когда построено столько зданий, сколько в «Лимите». Одно здание даёт долю: бонус ÷ лимит.\nНаведите на число, чтобы увидеть подробности.";
+const BLD_NOTE_HEAD_M = "ЭФФЕКТ\nСколько дают уже построенные здания этого вида. Итоги по всем зданиям сверху, на плашках.";
+function bldNum_(v) { const s = String(Math.round(Number(v) * 10) / 10).replace(".", ","); return s.replace(/^(\d+)(\d{3})/, "$1 $2"); }
+function bldPct_(v) { return bldNum_(Number(v) * 100) + "%"; }
+const BLD_PCT_INFO = {
+  "торговля": ["к доходу торговцев во всех регионах", "Сами торговые здания этим бонусом не умножаются."],
+  "ремесло": ["к ремеслу ремесленников во всех регионах", "Сами ремесленные здания этим бонусом не умножаются."],
+  "единство": ["к единству", "Каждый 1% = 1 пункт единства. Все постройки вместе дают не больше +50."],
+  "кризисы": ["к ослаблению кризисов", "Кризисы (голод, бунт, поветрие и др.) бьют слабее на эту долю. Все постройки вместе: не больше 90%."],
+  "призыв": ["к призыву", "Больше специалистов от феодалов. Все постройки вместе: не больше +100%."],
+  "содержание": ["скидки на содержание армии", "Армия обходится дешевле. Все постройки вместе: не больше 50%."],
+  "защита": ["к защите", "Учитывается в обороне при расчёте боёв. Все постройки вместе: не больше +200%."]
+};
+function buildingNote(b) {
+  const [cat, name, rem, mon, res, chain, ind, prof, lim] = b;
+  const L = [name.toUpperCase()];
+  const limTxt = lim >= 3 ? `Лимит: ${lim}, растёт с населением (${lim} на каждые 50 000 жителей).` : `Лимит: ${lim}, не растёт.`;
+  if (cat === "Сельское х-во") {
+    L.push(`+${bldNum_(prof)} еды в год за каждое здание.`, "Еда идёт в урожай: кормит народ, излишек даёт прирост населения. Соль, кризисы и модификаторы еды действуют и на неё.");
+  } else if (cat === "Ремесло") {
+    L.push(`+${bldNum_(prof)} ремесла в год за каждое здание.`, "Ремесло идёт на склад и тратится на стройки, армию и снаряжение. Уголь, кризисы и модификаторы ремесла действуют и на него.");
+  } else if (cat === "Торговля") {
+    L.push(`+${bldNum_(prof)} монет в год за каждое здание.`, "Монеты идут в казну (доля по бюджету уходит в фонд стройки). Шёлк, кризисы и модификаторы торговли действуют и на них.");
+  } else if (ind === "клирика") {
+    const capped = !["Религия", "Магия"].includes(cat);
+    L.push(`+${bldNum_(prof)} Клирики за ход за каждое здание.`, capped ? `Считаются только здания в пределах лимита (${lim}): максимум +${bldNum_(prof * lim)}.` : "Не зависит от лимита и населения: каждое здание даёт полную сумму.", "Клирика нужна на заклинания и обращения к богам.");
+  } else {
+    const info = BLD_PCT_INFO[ind] || ["", ""];
+    L.push(`+${bldPct_(prof)} ${info[0]}, когда построен весь лимит.`, `Одно здание даёт долю: при лимите ${lim} это +${bldPct_(prof / lim)}.` + (lim >= 3 ? " Когда лимит растёт с населением, доля одного здания уменьшается." : ""), info[1]);
+  }
+  L.push(limTxt);
+  L.push(`Цена: ${bldNum_(mon)} монет или ${bldNum_(rem)} ремесла.`);
+  if (String(res).trim()) L.push(`Нужны ресурсы: ${res}.`);
+  if (String(chain).trim()) L.push(`Сначала постройте: ${chain}.`);
+  return L.join("\n");
+}
+
+// Заметки на названия (B) и «За 1 шт.» (H) листа «Стройки». Можно запускать на готовой таблице: цифры не трогает.
+function applyBuildingNotes(ss) {
+  ss = ss || SS_(); const ws = ss.getSheetByName("Стройки"); if (!ws) return;
+  const Ly = bldLayout(), n = Ly.last - BLD_FIRST + 1, notes = Array.from({ length: n }, () => [""]);
+  BUILDINGS.forEach((b, i) => { notes[Ly.rows[i] - BLD_FIRST][0] = buildingNote(b); });
+  ws.getRange(BLD_FIRST, 2, n, 1).setNotes(notes);
+  ws.getRange(BLD_FIRST, 8, n, 1).setNotes(notes);
+  ws.getRange(BLD_HEAD, 8).setNote(BLD_NOTE_HEAD_H);
+  ws.getRange(BLD_HEAD, 13).setNote(BLD_NOTE_HEAD_M);
+}
+
 function fillBuildingsSheet(ss) {
   const ws = ss.getSheetByName("Стройки"); ws.setHiddenGridlines(true);
   const L = bldLayout(), firstRow = BLD_FIRST, lastRow = L.last;
@@ -696,6 +745,7 @@ function fillBuildingsSheet(ss) {
   ws.setConditionalFormatRules(rules);
   [1, 7, 9, 16, 18, 19].forEach(c => ws.hideColumns(c));
   ws.setFrozenRows(BLD_HEAD);
+  applyBuildingNotes(ss);
 }
 
 // Подсветка условий постройки: зелёным — выполнено, красным — не хватает ресурса или здания цепочки.
