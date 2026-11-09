@@ -10,6 +10,7 @@ const COLORS = ["#C8463A", "#3D7FCF", "#3E9E62", "#C9A646", "#9277C9", "#4FA3A0"
 const ESTATES = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
 const RESOURCE_NAMES = ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"];
 import { handleMcp } from "./mcp.js";
+import { parseVerdict, applyEffects, modEffectText } from "./effects.js";
 
 const CRISIS_NAMES = ["Голод", "Бунт феодалов", "Религиозный раскол", "Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];
 
@@ -99,6 +100,8 @@ async function handlePost(body, env, ctx, request) {
     case "adminChangePassword": return adminChangePassword(env, await requireAdmin(env, body.token), body.password);
     case "adminReadInputs": await requireAdmin(env, body.token); return adminReadInputs(env, body.stateId);
     case "adminWriteInputs": await requireAdmin(env, body.token); return adminWriteInputs(env, ctx, body.stateId, body.inputs);
+    case "adminParseEffects": await requireAdmin(env, body.token); return adminParseEffects(env, body.stateId, body.text);
+    case "adminApplyEffects": await requireAdmin(env, body.token); return adminApplyEffects(env, ctx, body.stateId, body.ops, body.source);
     case "adminCreateState": await requireAdmin(env, body.token); return adminCreateState(env, ctx, body.state);
     case "adminFindCopy": await requireAdmin(env, body.token); return adminFindCopy(env, ctx, body.stateId);
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
@@ -751,10 +754,18 @@ async function stateRow(env, stateId) {
 }
 
 const INPUT_RANGES = ["'Статистика'!B3", "'Регионы'!A4:R21", "'Ресурсы'!B4:B10", "'Расчёты'!B70:B73", "'Расчёты'!B85:B89", "'Расчёты'!B104", "'Расчёты'!B143:B144", "'Стройки'!O4",
-  "'Журнал'!A4:R4", "'Расчёты'!B105", "'Расчёты'!B154"];
+  "'Журнал'!A4:R4", "'Расчёты'!B105", "'Расчёты'!B154",
+  // 11.. новые блоки: накопленное единство, лист «Стройки» (авто, приоритет, построено), лимит построек за ход и текущие остатки (только чтение)
+  "'Расчёты'!B133", "'Стройки'!A12:O130", "'Стройки'!O8", "'Расчёты'!B150:B151", "'Расчёты'!B156:B157", "'Расчёты'!B39"];
+// «Модификаторы» читаем отдельно: у старых таблиц листа может не быть, и тогда остальное всё равно читается.
+const MOD_RANGE = "'Модификаторы'!A5:Z104", MOD_FIRST_ROW = 5, MOD_ROWS = 100;
+// Колонки строки модификатора (A..Z): D — формула «Срок/прогресс», E — текст эффектов (пишем сами).
+const MOD_NUM_COLS = { food: 10, craft: 11, income: 12, army: 13, levy: 14, growth: 15, unity: 16, unityPerTurn: 17, cleric: 23, treasury: 24, store: 25 };
+const BLD_FIRST_ROW = 12;
 // Блоки ввода «Цифр»: так же называются ключи inputs. Журнал правок хранит и откатывает их целиком.
-const INPUT_KEYS = ["name", "regions", "resources", "crises", "loyaltyDelta", "costs", "stocks", "budgetPct"];
-const INPUT_LABELS = { name: "Название", regions: "Регионы", resources: "Ресурсы", crises: "Кризисы", loyaltyDelta: "Поправки лояльности", costs: "Расходы хода", stocks: "Стартовые запасы", budgetPct: "Бюджет стройки" };
+const INPUT_KEYS = ["name", "regions", "resources", "crises", "loyaltyDelta", "costs", "stocks", "budgetPct", "unity", "modifiers", "construction"];
+const INPUT_LABELS = { name: "Название", regions: "Регионы", resources: "Ресурсы", crises: "Кризисы", loyaltyDelta: "Поправки лояльности", costs: "Расходы хода", stocks: "Стартовые запасы", budgetPct: "Бюджет стройки",
+  unity: "Единство", modifiers: "Модификаторы", construction: "Стройки" };
 // Стартовые запасы — строка хода 0 Журнала (дальше остатки переносятся формулами) и «Клирика начало».
 // Колонки строки 4: I/J — фонд стройки (ремесло/монеты), O — склад, R — казна.
 const STOCK_CELLS = { fundCraft: 8, fundCoins: 9, warehouse: 14, treasury: 17 };
@@ -767,7 +778,10 @@ async function adminReadInputs(env, stateId) {
 
 async function readInputs(env, r) {
   const qs = INPUT_RANGES.map((x) => "ranges=" + encodeURIComponent(x)).join("&");
-  const data = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`);
+  const [data, modData] = await Promise.all([
+    sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`),
+    sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values/${encodeURIComponent(MOD_RANGE)}?valueRenderOption=UNFORMATTED_VALUE`).catch(() => null),
+  ]);
   const v = data.valueRanges.map((x) => x.values || []);
   const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
   const cell = (rows, i, j = 0) => (rows[i] && rows[i][j] !== undefined ? rows[i][j] : "");
@@ -789,18 +803,58 @@ async function readInputs(env, r) {
       costs: { cleric: num(cell(v[5], 0)), craft: num(cell(v[6], 0)), coins: num(cell(v[6], 1)) },
       budgetPct: num(cell(v[7], 0)) || 30,
       stocks: { ...Object.fromEntries(Object.entries(STOCK_CELLS).map(([k, j]) => [k, num(cell(v[8], 0, j))])), clerics: num(cell(v[9], 0)) },
+
+      unity: num(cell(v[11], 0)),
+      modifiers: modData ? readModifierRows(modData.values || []) : null,
+      construction: readConstruction(v[12], num(cell(v[13], 0))),
+      // только для показа: что в таблице сейчас (последняя строка Журнала и Расчёты)
+      view: { treasury: num(cell(v[14], 0)), warehouse: num(cell(v[14], 1)), fundCraft: num(cell(v[15], 0)), fundCoins: num(cell(v[15], 1)), unity: num(cell(v[16], 0)),
+        clerics: num(cell(v[9], 0)), turn: num(cell(v[10], 0)) },
     },
   };
+}
+
+// Строки листа «Модификаторы» с номером строки. Пустые строки (без названия) пропускаем.
+function readModifierRows(rows) {
+  const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+  const out = [];
+  for (let i = 0; i < MOD_ROWS; i++) {
+    const c = rows[i] || [];
+    if (!String(c[0] ?? "").trim()) continue;
+    const m = { row: MOD_FIRST_ROW + i, name: String(c[0]), type: String(c[1] ?? ""), status: String(c[2] ?? ""), source: String(c[5] ?? ""), note: String(c[6] ?? ""),
+      turns: c[7] === "" || c[7] === undefined ? "" : num(c[7]), progress: c[8] === "" || c[8] === undefined ? "" : num(c[8]), progressStep: c[9] === "" || c[9] === undefined ? "" : num(c[9]),
+      loy: [18, 19, 20, 21, 22].map((j) => num(c[j])) };
+    for (const [k, j] of Object.entries(MOD_NUM_COLS)) m[k] = num(c[j]);
+    out.push(m);
+  }
+  return out;
+}
+
+// Строки зданий листа «Стройки» (A категория, B здание, K построено, N авто, O приоритет); разделители категорий без числа в K пропускаем.
+function readConstruction(rows, maxPerTurn) {
+  const items = [];
+  (rows || []).forEach((c, i) => {
+    const name = String(c[1] ?? "").trim(), k = c[10];
+    if (!name || (typeof k !== "number" && !/^\d+$/.test(String(k ?? "").trim())) || items.some((x) => x.name === name)) return;
+    const prio = Number(c[14]);
+    items.push({ row: BLD_FIRST_ROW + i, cat: String(c[0] ?? ""), name, built: Number(k) || 0, auto: Number(c[13]) === 1 ? 1 : 0, prio: c[14] === "" || c[14] === undefined || !Number.isFinite(prio) ? 100 : prio });
+  });
+  return { maxPerTurn, items };
 }
 
 async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   const r = await stateRow(env, stateId);
   if (!inp || typeof inp !== "object") return { ok: false, error: "Нет данных." };
   const data = inputsData(inp);
+  // старые значения — для журнала правок и отката; без них запись всё равно идёт (кроме модификаторов и строек: их пишем по разнице)
+  const before = await readInputs(env, r).catch(() => null);
+  if (inp.modifiers !== undefined || inp.construction !== undefined) {
+    if (!before) throw new HttpError("Не удалось прочитать таблицу перед записью модификаторов и строек.");
+    if (Array.isArray(inp.modifiers)) data.push(...(await modifiersData(env, r, inp.modifiers, before.inputs.modifiers)));
+    if (inp.construction && typeof inp.construction === "object") data.push(...constructionData(inp.construction, before.inputs.construction));
+  }
   if (!data.length) return { ok: false, error: "Нечего сохранять." };
   await keepCrisisFormulas(env, r, data);
-  // старые значения — для журнала правок и отката; без них запись всё равно идёт
-  const before = await readInputs(env, r).catch(() => null);
   await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
   const after = await readInputs(env, r).catch(() => null);
   if (before && after) await logStatEdit(env, r.id, INPUT_KEYS.filter((k) => inp[k] !== undefined), before, after, undoOf).catch((e) => console.error(e));
@@ -839,6 +893,7 @@ function inputsData(inp) {
       { range: "'Расчёты'!B105", values: [[n(k.clerics)]] });
   }
   if (inp.budgetPct !== undefined) data.push({ range: "'Стройки'!O4", values: [[Math.round(n(inp.budgetPct, 0, 100))]] });
+  if (inp.unity !== undefined) data.push({ range: "'Расчёты'!B133", values: [[Math.round(n(inp.unity, -1000, 1000) * 100) / 100]] });
   if (Array.isArray(inp.regions)) {
     if (inp.regions.length > 18) throw new HttpError("Регионов не больше 18.");
     // Строки 4..21 переписываем по порядку; формулы в C, N–Q не трогаем.
@@ -854,6 +909,116 @@ function inputsData(inp) {
     data.push({ range: "'Регионы'!A4:B21", values: ab }, { range: "'Регионы'!D4:M21", values: dm }, { range: "'Регионы'!R4:R21", values: rr });
   }
   return data;
+}
+
+// Модификаторы: список с номерами строк (как из readInputs). Строка, которой нет в списке, очищается; новая (без row) — в первую пустую.
+// Пишем только изменившиеся ячейки: формулы в ячейках (условные эффекты) не трогаем, если их значение не меняли.
+async function modifiersData(env, r, list, cur) {
+  if (cur === null) throw new HttpError("В таблице нет листа «Модификаторы».");
+  if (list.length > MOD_ROWS) throw new HttpError("Модификаторов не больше 100.");
+  const res = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values/${encodeURIComponent(MOD_RANGE)}?valueRenderOption=FORMULA`);
+  const raw = res.values || [];
+  const vals = await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values/${encodeURIComponent(MOD_RANGE)}?valueRenderOption=UNFORMATTED_VALUE`);
+  const shown = vals.values || [];
+  const used = new Set(), target = new Map();
+  for (const m of list) {
+    const row = Number(m && m.row);
+    if (row >= MOD_FIRST_ROW && row < MOD_FIRST_ROW + MOD_ROWS && !used.has(row)) { used.add(row); target.set(row, m); }
+  }
+  const occupied = new Set(cur.map((m) => m.row));
+  let free = MOD_FIRST_ROW;
+  for (const m of list) {
+    const row = Number(m && m.row);
+    if (target.get(row) === m) continue;
+    while (free < MOD_FIRST_ROW + MOD_ROWS && (used.has(free) || occupied.has(free))) free++;
+    if (free >= MOD_FIRST_ROW + MOD_ROWS) throw new HttpError("Лист «Модификаторы» заполнен (100 строк).");
+    used.add(free); target.set(free, m);
+  }
+  const rows = new Set([...occupied, ...target.keys()]);
+  const data = [];
+  for (const row of [...rows].sort((a, b) => a - b)) {
+    const m = target.get(row);
+    const cells = m && String(m.name || "").trim() ? modCells(m) : Array(26).fill("");
+    const rc = raw[row - MOD_FIRST_ROW] || [], sc = shown[row - MOD_FIRST_ROW] || [];
+    let changed = false;
+    // E — свой текст администратора («Сброд ×1,2 (формула Расчётов)») не затираем: пишем, только если там был автотекст или строка новая
+    const old = cur.find((q) => q.row === row);
+    const autoE = !old || !String(rc[4] ?? "").trim() || String(rc[4]) === modEffectText(old);
+    const out = cells.map((t, j) => {
+      if (j === 3 || (j === 4 && !autoE && m && String(m.name || "").trim())) return null;   // D — формула срока
+      const was = rc[j] ?? "";
+      if (String(was).startsWith("=")) { if (sameCell(t, sc[j])) return null; }
+      else if (sameCell(t, was)) return null;
+      if (j !== 4) changed = true;
+      return t;
+    });
+    if (changed) data.push({ range: `'Модификаторы'!A${row}:Z${row}`, values: [out] });
+  }
+  return data;
+}
+const sameCell = (a, b) => {
+  const x = a ?? "", y = b ?? "";
+  if (String(x) === String(y)) return true;
+  const nx = Number(x === "" ? 0 : x), ny = Number(y === "" ? 0 : y);
+  return Number.isFinite(nx) && Number.isFinite(ny) && nx === ny && (x === "" || y === "" || typeof x === "number" || typeof y === "number");
+};
+function modCells(m) {
+  const n = (x, min = -1e6, max = 1e6) => { const v = Number(x); return Number.isFinite(v) && v !== 0 ? Math.min(max, Math.max(min, v)) : ""; };
+  const s = (x, len) => String(x ?? "").slice(0, len);
+  const type = s(m.type, 30).trim() || "Постоянный", status = s(m.status, 20).trim() || "АКТИВЕН";   // свои типы таблицы («Бафф») не трогаем
+  const c = Array(26).fill("");
+  c[0] = s(m.name, 120).trim(); c[1] = type; c[2] = status; c[3] = null; c[5] = s(m.source, 120); c[6] = s(m.note, 1000);
+  c[7] = m.turns === "" || m.turns === null || m.turns === undefined ? "" : Math.max(0, Math.round(Number(m.turns) || 0));
+  c[8] = m.progress === "" || m.progress === undefined || m.progress === null ? "" : Math.max(0, Math.min(100, Number(m.progress) || 0));
+  c[9] = m.progressStep === "" || m.progressStep === undefined || m.progressStep === null ? "" : Number(m.progressStep) || 0;
+  for (const [k, j] of Object.entries(MOD_NUM_COLS)) c[j] = n(m[k]);
+  [0, 1, 2, 3, 4].forEach((i) => { c[18 + i] = n(m.loy && m.loy[i], -100, 100); });
+  c[4] = modEffectText(m);
+  return c;
+}
+
+// Стройки: «Построено», «Авто», «Приоритет» по названию здания и лимит построек за ход. Пишем только то, что изменилось.
+function constructionData(c, cur) {
+  const data = [];
+  if (!cur) throw new HttpError("Не прочитан лист «Стройки».");
+  if (c.maxPerTurn !== undefined && Number(c.maxPerTurn) !== Number(cur.maxPerTurn)) data.push({ range: "'Стройки'!O8", values: [[Math.max(0, Math.round(Number(c.maxPerTurn) || 0))]] });
+  const byName = new Map(cur.items.map((x) => [x.name, x]));
+  for (const it of Array.isArray(c.items) ? c.items : []) {
+    const was = byName.get(String(it && it.name));
+    if (!was) continue;
+    const built = Math.max(0, Math.round(Number(it.built) || 0)), auto = Number(it.auto) === 1 ? 1 : 0, prio = Math.max(0, Math.round(Number(it.prio) || 100));
+    if (it.built !== undefined && built !== was.built) data.push({ range: `'Стройки'!K${was.row}`, values: [[built]] });
+    if (it.auto !== undefined && auto !== was.auto) data.push({ range: `'Стройки'!N${was.row}`, values: [[auto]] });
+    if (it.prio !== undefined && prio !== was.prio) data.push({ range: `'Стройки'!O${was.row}`, values: [[prio]] });
+  }
+  return data;
+}
+
+/* ============================================================
+ * ЭФФЕКТЫ ВЕРДИКТА: разбор текста → предпросмотр → запись одной правкой (журнал и откат как у «Цифр»)
+ * ============================================================ */
+function effectsContext(inputs) {
+  return { buildings: ((inputs.construction && inputs.construction.items) || []).map((x) => x.name), regions: inputs.regions.map((g) => ({ name: g.name, type: g.type })) };
+}
+
+async function adminParseEffects(env, stateId, text) {
+  const r = await stateRow(env, stateId);
+  if (!String(text || "").trim()) return { ok: false, error: "Вставьте текст вердикта." };
+  const { inputs } = await readInputs(env, r);
+  const { ops, unparsed } = parseVerdict(String(text).slice(0, 20000), effectsContext(inputs));
+  const preview = applyEffects(inputs, ops);
+  return { ok: true, ops, unparsed, summary: preview.summary, warnings: preview.warnings, ...effectsContext(inputs), turn: inputs.view.turn };
+}
+
+async function adminApplyEffects(env, ctx, stateId, ops, source) {
+  const r = await stateRow(env, stateId);
+  if (!Array.isArray(ops) || !ops.length) return { ok: false, error: "Не выбрано ни одного эффекта." };
+  if (ops.length > 60) return { ok: false, error: "Слишком много эффектов за раз (больше 60)." };
+  const { inputs } = await readInputs(env, r);
+  const res = applyEffects(inputs, ops, { source: String(source || "").trim().slice(0, 120) || `Вердикт, ход ${(inputs.view.turn || 0) + 1}` });
+  if (!Object.keys(res.inputs).length) return { ok: false, error: "Эти эффекты ничего не меняют в таблице.", warnings: res.warnings };
+  const w = await adminWriteInputs(env, ctx, stateId, res.inputs);
+  return { ...w, summary: res.summary, warnings: res.warnings };
 }
 
 /* ============================================================
@@ -888,6 +1053,22 @@ function diffInputs(b, a, keys) {
     if (sameBlock(x, y)) continue;
     if (k === "name") pair("Название", x, y);
     else if (k === "budgetPct") pair("Бюджет стройки, %", x, y);
+    else if (k === "unity") pair("Единство накопленное", x, y);
+    else if (k === "modifiers") {
+      const key = (m) => m.row + ":" + m.name;
+      const xs = x || [], ys = y || [];
+      for (const m of ys) { const o = xs.find((q) => key(q) === key(m)); if (!o) out.push(`Модификатор «${m.name}» добавлен`); else if (!sameBlock(o, m)) out.push(`Модификатор «${m.name}» изменён`); }
+      for (const m of xs) if (!ys.some((q) => key(q) === key(m))) out.push(`Модификатор «${m.name}» убран`);
+    } else if (k === "construction") {
+      if (x && y && x.maxPerTurn !== y.maxPerTurn) pair("Построек за ход", x.maxPerTurn, y.maxPerTurn);
+      for (const it of (y && y.items) || []) {
+        const o = x && x.items.find((q) => q.name === it.name);
+        if (!o) continue;
+        if (o.built !== it.built) pair(`${it.name}, построено`, o.built, it.built);
+        if (o.auto !== it.auto) out.push(`${it.name}: автостройка ${it.auto ? "включена" : "выключена"}`);
+        if (o.prio !== it.prio) pair(`${it.name}, приоритет`, o.prio, it.prio);
+      }
+    }
     else if (k === "stocks") {
       const L = { treasury: "Казна", warehouse: "Склад", fundCraft: "Фонд, ремесло", fundCoins: "Фонд, монеты", clerics: "Клирика" };
       Object.keys(L).forEach((f) => pair(L[f], x[f], y[f]));

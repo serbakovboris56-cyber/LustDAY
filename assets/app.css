@@ -565,3 +565,34 @@ button { font: inherit; color: inherit; }
   background: rgba(0, 0, 0, .78); border: 1px solid var(--rule); color: var(--gold);
   font-size: 13px; text-align: center; pointer-events: none;
 }
+
+/* «Править цифры»: эффекты вердикта, модификаторы, автостройка */
+.stats__now { margin: 0 0 6px; font-size: 14px; color: var(--gold-soft); line-height: 1.6; }
+.stats__now b { color: var(--gold); font-weight: 600; }
+#fxText, .modcard textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; resize: vertical; }
+.fx__bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 10px 0; }
+.fx__bar label { display: grid; gap: 4px; font-size: 14px; color: var(--gold-soft); }
+.fxop { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
+.fxop.is-off { opacity: .45; }
+.fxop__head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fxop__guess { color: var(--gold-soft); font-style: italic; }
+.fxop__src { display: block; margin-top: 8px; color: var(--gold-soft); overflow-wrap: anywhere; }
+.fx__unparsed, .fx__summary { font-size: 14px; margin: 10px 0; overflow-wrap: anywhere; }
+.fx__summary { color: var(--gold); }
+.fx__unparsed ul, .fx__summary ul { margin: 4px 0 0; padding-left: 20px; }
+.modcard, .bldcat { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.modcard summary, .bldcat summary { cursor: pointer; overflow-wrap: anywhere; }
+.modcard summary small, .bldcat summary small { color: var(--gold-soft); margin-left: 6px; }
+.modcard[open] summary, .bldcat[open] summary { margin-bottom: 10px; }
+.modcard__name { font-weight: 600; }
+.modcard__st { font-size: 11px; letter-spacing: .05em; color: var(--gold-soft); }
+.modcard__st.is-on { color: #7fc77a; }
+.modcard .linklike { margin-top: 8px; }
+.bld-table { min-width: 0; }
+.bld-table td:first-child { min-width: 160px; }
+.bld-table td input[type="number"] { width: 70px; }
+.bld-table td input[type="checkbox"] { width: auto; }
+#statsDialog textarea, #statsDialog select { background: var(--banner); border: 1px solid var(--rule); color: var(--gold); padding: 8px 10px; font: inherit; font-size: 15px; border-radius: 2px; }
+#statsDialog textarea:focus, #statsDialog select:focus { border-color: var(--gold); outline: none; }
+#statsDialog label.check { display: flex; align-items: center; gap: 8px; }
+#statsDialog .fxop__head { color: var(--gold); }
