@@ -104,6 +104,10 @@ button { font: inherit; color: inherit; }
   border: 1px solid var(--rule);
   min-width: 220px;
   max-width: calc(100% - 24px);
+  /* список не должен дорастать до кнопок масштаба и линейки в левом верхнем углу */
+  max-height: calc(100% - 170px);
+  display: flex;
+  flex-direction: column;
 }
 .roster__toggle {
   display: flex;
@@ -122,7 +126,15 @@ button { font: inherit; color: inherit; }
 .roster.is-collapsed .roster__toggle { border-bottom: 0; }
 .roster.is-collapsed .roster__toggle::after { content: "+"; }
 .roster.is-collapsed .roster__list { display: none; }
-.roster__list { list-style: none; margin: 0; padding: 4px 0; }
+.roster__toggle { flex: none; }
+.roster__count { margin-left: auto; color: var(--gold-soft); font: 400 13px/1.2 var(--sans); align-self: center; }
+.roster__list {
+  list-style: none; margin: 0; padding: 4px 0;
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--rule) transparent;
+}
+.roster__list::-webkit-scrollbar { width: 6px; }
+.roster__list::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
 .roster__list button {
   display: flex;
   align-items: center;
@@ -130,7 +142,7 @@ button { font: inherit; color: inherit; }
   width: 100%;
   background: none;
   border: 0;
-  padding: 6px 12px;
+  padding: 4px 12px;
   text-align: left;
   cursor: pointer;
 }
@@ -282,7 +294,7 @@ button { font: inherit; color: inherit; }
   .panel__body { padding: 0 16px 24px; }
   .herald h2 { font-size: 22px; }
   .pennant { width: 38px; height: 76px; font-size: 22px; padding-top: 14px; }
-  .roster { left: 8px; bottom: 16px; min-width: 0; }
+  .roster { left: 8px; bottom: 16px; min-width: 0; max-height: calc(100% - 90px); }
   .panel:not([hidden]) ~ .roster, .stage.has-panel .roster { display: none; }
   .leaflet-control-zoom { display: none; }
   .stage.has-panel .leaflet-control-attribution { display: none; }
@@ -310,6 +322,7 @@ button { font: inherit; color: inherit; }
 .admin-table .muted { font-size: 12px; }
 .pw-form { display: flex; gap: 6px; }
 .pw-form input { width: 130px; }
+.pw-show code { font: 14px/1.4 ui-monospace, monospace; color: var(--gold); user-select: all; }
 .admin__add { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--rule); }
 .admin__add h3 { grid-column: 1 / -1; margin: 0; font: 700 18px/1.2 var(--serif); }
 .admin__wide { grid-column: 1 / -1; }

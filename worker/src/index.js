@@ -94,6 +94,8 @@ async function handlePost(body, env, ctx, request) {
     case "adminSaveState": await requireAdmin(env, body.token); return adminSaveState(env, body.state);
     case "adminDeleteState": await requireAdmin(env, body.token); return adminDeleteState(env, body.stateId);
     case "adminSetPassword": await requireAdmin(env, body.token); return adminSetPassword(env, body.stateId, body.password);
+    case "adminPasswords": await requireAdmin(env, body.token); return adminPasswords(env);
+    case "adminResetAllPasswords": await requireAdmin(env, body.token); return adminResetAllPasswords(env, body.confirm);
     case "adminSaveBorder": await requireAdmin(env, body.token); return adminSaveBorder(env, body.stateId, body.geometry);
     case "adminInfo": await requireAdmin(env, body.token); return adminInfo(env);
     case "adminMcpRotate": await requireAdmin(env, body.token); return adminMcpRotate(env);
@@ -168,6 +170,34 @@ async function hashPassword(env, password, salt) {
   return toHex(await crypto.subtle.sign("HMAC", await pepperKey(env), enc.encode(salt + "|" + password)));
 }
 const newSalt = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
+
+// Пароли игроков в обратимом виде — только чтобы админ мог их посмотреть и переслать игроку.
+// Вход по-прежнему сверяет хеш; здесь AES-GCM с ключом PASS_KEY (секрет воркера) или своим ключом сервера в D1.
+// Отдельная таблица: в общий список государств (и в MCP) пароли не попадают.
+async function ensurePassTable(env) {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS state_passwords (state_id TEXT PRIMARY KEY, enc TEXT NOT NULL, updated TEXT NOT NULL)").run();
+}
+let passKeyCache = null;
+async function passKey(env) {
+  if (passKeyCache) return passKeyCache;
+  const seed = env.PASS_KEY || (await serverSecret(env, "pass_key"));
+  const raw = await crypto.subtle.digest("SHA-256", enc.encode(seed + "|vpi-pass"));
+  passKeyCache = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return passKeyCache;
+}
+async function storePlayerPassword(env, stateId, password) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await passKey(env), enc.encode(password));
+  await ensurePassTable(env);
+  await env.DB.prepare("INSERT INTO state_passwords (state_id, enc, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET enc=?2, updated=?3")
+    .bind(stateId, b64url(iv) + "." + b64url(ct), new Date().toISOString()).run();
+}
+async function readPlayerPassword(env, encText) {
+  try {
+    const [iv, ct] = String(encText).split(".");
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64url(iv) }, await passKey(env), fromB64url(ct)));
+  } catch { return null; }   // ключ сменили: пароль надо задать заново
+}
 
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false;
@@ -248,7 +278,10 @@ async function login(env, loginRaw, passwordRaw, request) {
 
   const st = await env.DB.prepare("SELECT id, pass_hash, salt FROM states WHERE lower(login) = ? AND login <> ''").bind(loginName).first();
   if (!st || !st.pass_hash) { await hashPassword(env, password, "dummy"); return failed(); }   // одинаковое время ответа
-  return timingSafeEqual(await hashPassword(env, password, st.salt), st.pass_hash) ? passed({ role: "player", stateId: st.id, login: loginName }) : failed();
+  if (!timingSafeEqual(await hashPassword(env, password, st.salt), st.pass_hash)) return failed();
+  // пароль, заданный до появления обратимой копии, становится виден админу после первого входа игрока
+  try { await storePlayerPassword(env, st.id, password); } catch { /* вход важнее */ }
+  return passed({ role: "player", stateId: st.id, login: loginName });
 }
 
 // Продление входа: сайт присылает сохранённый токен при открытии и получает свежий на TOKEN_DAYS дней.
@@ -321,6 +354,8 @@ const RANGES = [
   "'Модификаторы'!A5:E104",
   "'Статистика'!B3",
   "'Расчёты'!A14:C18",   // своё название сословия берётся только у сословия с пометкой «без прироста» в C (вампиры Кан'Ни и Сайби'Рэ)
+  "'Армия'!C86:D95",     // флот: C корабль, D численность
+  "'Армия'!J86:M105",    // склад снаряжения: J вид, K предмет, M на складе
 ];
 
 async function readSheetValues(env, sheetId) {
@@ -340,7 +375,7 @@ async function readSheetValues(env, sheetId) {
 }
 
 function parseLedger(vr, startYear) {
-  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows, estateRows = []] = vr;
+  const [calcRows, regionRows, resRows, armyRows, modRows, nameRows, estateRows = [], fleetRows = [], depotRows = []] = vr;
   const raw = (r) => (calcRows[r - 1] || [])[0];
   const n = (r) => { const x = Number(raw(r)); return Number.isFinite(x) ? x : 0; };
   const s = (r) => String(raw(r) ?? "");
@@ -370,6 +405,8 @@ function parseLedger(vr, startYear) {
     clerics: { stock: round(n(105), 2), income: round(n(103), 2), end: round(n(106), 2), threat: s(107) },
     levy: { specialists: round(n(42)), rabble: round(n(43)), inRanks: round(n(112)) },
     armyPower: round(num(cell(armyRows[0], 0))),
+    fleet: fleetRows.map((r) => ({ name: String(cell(r, 0)).trim(), count: round(num(cell(r, 1))) })).filter((x) => x.name && x.count > 0),
+    depot: depotRows.map((r) => ({ kind: String(cell(r, 0)).trim(), name: String(cell(r, 1)).trim(), stock: round(num(cell(r, 3))) })).filter((x) => x.name && x.stock > 0),
     resources: RESOURCE_NAMES.map((name, i) => ({ name, count: num(cell(resRows[i], 0)) })),
     crises: CRISIS_NAMES.filter((_, i) => s(67 + i) === "ДА"),
     regions,
@@ -623,13 +660,14 @@ async function adminSaveState(env, st) {
 
 async function adminDeleteState(env, stateId) {
   stateId = String(stateId || "");
-  await Promise.all([ensureProvinceTable(env), ensureSnapshotTable(env)]);
+  await Promise.all([ensureProvinceTable(env), ensureSnapshotTable(env), ensurePassTable(env)]);
   // из снимка — сразу, иначе государство висело бы на сайте до следующего сбора цифр
   const r = await env.DB.batch([
     env.DB.prepare("DELETE FROM states WHERE id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM borders WHERE state_id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM provinces WHERE state_id = ?").bind(stateId),
     env.DB.prepare("DELETE FROM snapshot_states WHERE state_id = ?").bind(stateId),
+    env.DB.prepare("DELETE FROM state_passwords WHERE state_id = ?").bind(stateId),
   ]);
   if (!r[0].meta.changes) return { ok: false, error: "Государство не найдено." };
   await clearOrders(env, stateId);   // новое государство с тем же ID не должно унаследовать пропуски и заморозку
@@ -643,7 +681,34 @@ async function adminSetPassword(env, stateId, pass) {
   const salt = newSalt();
   const r = await env.DB.prepare("UPDATE states SET pass_hash = ?, salt = ? WHERE id = ?").bind(await hashPassword(env, pass, salt), salt, stateId).run();
   if (!r.meta.changes) return { ok: false, error: "Государство не найдено." };
+  await storePlayerPassword(env, stateId, pass);
   return { ok: true };
+}
+
+// Новые случайные пароли всем государствам с логином: старые перестают работать.
+const PASS_ABC = "abcdefghijkmnpqrstuvwxyz23456789";   // без l, o, 0, 1 — чтобы не путать при перепечатке
+const randomPassword = () => [...crypto.getRandomValues(new Uint8Array(10))].map((x) => PASS_ABC[x % PASS_ABC.length]).join("");
+async function adminResetAllPasswords(env, confirm) {
+  if (confirm !== true) return { ok: false, error: "Нужно подтверждение." };
+  const { results } = await env.DB.prepare("SELECT id FROM states WHERE login <> ''").all();
+  const updates = [];
+  for (const r of results) {
+    const pass = randomPassword(), salt = newSalt();
+    updates.push({ id: r.id, pass, stmt: env.DB.prepare("UPDATE states SET pass_hash = ?, salt = ? WHERE id = ?").bind(await hashPassword(env, pass, salt), salt, r.id) });
+  }
+  if (updates.length) await env.DB.batch(updates.map((u) => u.stmt));
+  for (const u of updates) await storePlayerPassword(env, u.id, u.pass);
+  return { ok: true, count: updates.length };
+}
+
+// Пароли игроков для «Управления»: { id: пароль | null }; null — задан до обновления и игрок с тех пор не входил.
+async function adminPasswords(env) {
+  await ensurePassTable(env);
+  const { results } = await env.DB.prepare(`SELECT s.id, p.enc FROM states s LEFT JOIN state_passwords p ON p.state_id = s.id
+      WHERE s.pass_hash IS NOT NULL AND s.pass_hash <> ''`).all();
+  const passwords = {};
+  for (const r of results) passwords[r.id] = r.enc ? await readPlayerPassword(env, r.enc) : null;
+  return { ok: true, passwords };
 }
 
 // Свой пароль администратора: строка в admins заменяет секрет ADMIN_PASSWORD для этого логина,
@@ -696,6 +761,7 @@ function mcpApi(env, ctx, request) {
       const r = await handlePost({ ...body, action, token: await adminToken() }, env, ctx, request);
       return r instanceof RawJSON ? JSON.parse(r.text) : r;
     },
+    siteUrl: String(env.SITE_URL || "https://serbakovboris56-cyber.github.io/LustDAY/").replace(/#.*$/, ""),
     public: async () => withFreeze(env, await publicPayload(env, ctx)),
     marks: () => mapMarks(env),
     // точка города провинции (или подписи провинции) для меток «рядом с провинцией»
@@ -801,7 +867,7 @@ async function readInputs(env, r) {
       crises: MANUAL_CRISES.map((name, i) => ({ name, on: cell(v[3], i) === "ДА" })),
       loyaltyDelta: ESTATES.map((name, i) => ({ name, value: num(cell(v[4], i)) })),
       costs: { cleric: num(cell(v[5], 0)), craft: num(cell(v[6], 0)), coins: num(cell(v[6], 1)) },
-      budgetPct: num(cell(v[7], 0)) || 30,
+      budgetPct: num(cell(v[7], 0)),   // пустая ячейка = 0%, как в движке
       stocks: { ...Object.fromEntries(Object.entries(STOCK_CELLS).map(([k, j]) => [k, num(cell(v[8], 0, j))])), clerics: num(cell(v[9], 0)) },
 
       unity: num(cell(v[11], 0)),
@@ -1566,8 +1632,15 @@ async function runTurnJob(env, job) {
   try {
     const r = await env.DB.prepare("SELECT sheet_id FROM states WHERE id = ?").bind(job.state_id).first();
     if (!r || !r.sheet_id) throw new Error("у государства нет таблицы");
+    // запасы особых листов (вера, рабы, трупы…) снимаем ДО хода: после него номер хода и формулы уже другие
+    let carry = null, carryErr = "";
+    try { carry = await readCarry(env, r.sheet_id); } catch (e) { carryErr = String(e && e.message || e); }
     const d = await engineCall(env, { action: "apply", sheetId: r.sheet_id, expectedTurn: job.expected_turn });
-    if (d.ok) backup = d.backupUrl || "";
+    if (d.ok) {
+      backup = d.backupUrl || "";
+      if (!carryErr) { try { await writeCarry(env, r.sheet_id, carry); } catch (e) { carryErr = String(e && e.message || e); } }
+      if (carryErr) error = "ход применён, но особые листы не перенесены: " + carryErr;
+    }
     else if (d.code === "already" && Number(d.turn) === job.expected_turn) error = "ход уже был применён раньше";
     else { status = "error"; error = d.error || "ошибка Движка"; }
   } catch (e) { status = "error"; error = String(e && e.message || e); }
@@ -1577,6 +1650,68 @@ async function runTurnJob(env, job) {
   if (status === "done") stmts.push(missesStmt(env, job.state_id, job.had_order ? 0 : (job.misses_before || 0) + 1, now));
   await env.DB.batch(stmts);
   if (status === "done") await refreshOneState(env, job.state_id).catch(() => null);
+}
+
+/* ============================================================
+ * ПЕРЕНОС ОСОБЫХ ЛИСТОВ ПРИ «НОВОМ ХОДЕ»
+ * Лист особой механики (Некромантия, Зижи Де, Зелёный пакт, Ямы…) может держать блок в N1:O14:
+ *   N1 = «ПЕРЕНОС», ниже по строке на пару: N — куда (диапазон), O — откуда (диапазон того же размера).
+ * Диапазон без имени листа относится к этому же листу. Значения «откуда» читаются до хода (это итог
+ * хода, который видел игрок), после успешного хода записываются в «куда». Так запас на конец хода
+ * становится запасом на начало следующего, а ручные поля хода обнуляются. Откат хода возвращает
+ * и эти листы: Движок восстанавливает таблицу из копии целиком.
+ * ============================================================ */
+const STANDARD_SHEETS = new Set(["Статистика", "Армия", "Ресурсы", "Пантеон", "Журнал", "Стройки", "Расчёты", "Регионы", "Модификаторы",
+  "Хроника", "События", "Приказы", "Расы", "Расы_Контент", "Постройки"]);
+const CARRY_BLOCK = "N1:O14";
+const quoteSheet = (name) => "'" + String(name).replace(/'/g, "''") + "'";
+const qualify = (ref, sheet) => (String(ref).includes("!") ? String(ref).trim() : quoteSheet(sheet) + "!" + String(ref).trim());
+
+// «D16:F33» → {rows: 18, cols: 3}; одна ячейка → 1×1
+function rangeSize(ref) {
+  const a1 = String(ref).split("!").pop().replace(/\$/g, "");
+  const m = a1.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
+  if (!m) throw new HttpError("непонятный диапазон в блоке ПЕРЕНОС: " + ref);
+  const col = (x) => x.toUpperCase().split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  if (!m[3]) return { rows: 1, cols: 1 };
+  return { rows: Math.abs(Number(m[4]) - Number(m[2])) + 1, cols: Math.abs(col(m[3]) - col(m[1])) + 1 };
+}
+
+async function readCarry(env, sheetId) {
+  const meta = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}?fields=sheets.properties.title`);
+  const titles = (meta.sheets || []).map((x) => x.properties.title).filter((t) => !STANDARD_SHEETS.has(t));
+  if (!titles.length) return [];
+  const qs = titles.map((t) => "ranges=" + encodeURIComponent(quoteSheet(t) + "!" + CARRY_BLOCK)).join("&");
+  const blocks = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchGet?${qs}&valueRenderOption=FORMATTED_VALUE`);
+  const pairs = [];
+  (blocks.valueRanges || []).forEach((vr, i) => {
+    const rows = vr.values || [];
+    if (String((rows[0] || [])[0] || "").trim().toUpperCase() !== "ПЕРЕНОС") return;
+    rows.slice(1).forEach((row) => {
+      const to = String(row[0] || "").trim(), from = String(row[1] || "").trim();
+      if (!to || !from) return;
+      const a = rangeSize(to), b = rangeSize(from);
+      if (a.rows !== b.rows || a.cols !== b.cols) throw new HttpError(`ПЕРЕНОС на листе «${titles[i]}»: ${to} и ${from} разного размера`);
+      pairs.push({ to: qualify(to, titles[i]), from: qualify(from, titles[i]), ...a });
+    });
+  });
+  if (!pairs.length) return [];
+  const q2 = pairs.map((p) => "ranges=" + encodeURIComponent(p.from)).join("&");
+  const src = await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchGet?${q2}&valueRenderOption=UNFORMATTED_VALUE`);
+  return pairs.map((p, i) => {
+    const got = (src.valueRanges[i] && src.valueRanges[i].values) || [];
+    // пустые хвосты Google не присылает: дополняем до размера, чтобы пустое значение стёрло старое
+    const values = Array.from({ length: p.rows }, (_, r) => Array.from({ length: p.cols }, (_, c) => {
+      const v = (got[r] || [])[c];
+      return v === undefined || v === null ? "" : v;
+    }));
+    return { range: p.to, values };
+  });
+}
+
+async function writeCarry(env, sheetId, data) {
+  if (!data || !data.length) return;
+  await sheetsFetch(env, `/v4/spreadsheets/${sheetId}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
 }
 
 // Догон после разморозки: Движок дописывает пустые ходы до expected_turn (engineSkip_ в Движок.gs).
