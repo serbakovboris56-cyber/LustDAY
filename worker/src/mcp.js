@@ -50,6 +50,21 @@ const inputsSchema = {
     costs: obj({ cleric: { type: "number" }, craft: { type: "number" }, coins: { type: "number" } }),
     stocks: obj({ treasury: { type: "number" }, warehouse: { type: "number" }, fundCraft: { type: "number" }, fundCoins: { type: "number" }, clerics: { type: "number" } }),
     budgetPct: { type: "number", minimum: 0, maximum: 100, description: "Доля дохода в фонд стройки, %." },
+    unity: { type: "number", description: "Единство, накопленное от вердиктов (Расчёты!B133): разовые прибавки и потери единства." },
+    modifiers: {
+      type: "array", maxItems: 100,
+      description: "ВЕСЬ список строк листа «Модификаторы» (как в vpi_read_inputs, с row). Строка, которой нет в списке, очищается; новая — без row. Меняются только изменённые ячейки, формулы не трогаются.",
+      items: { type: "object", properties: { row: { type: "number" }, name: { type: "string" }, type: { type: "string", description: "Постоянный, Временный, Проект" },
+        status: { type: "string", description: "АКТИВЕН, ОТКЛЮЧЁН, ЗАВЕРШЁН, ИСТЁК" }, turns: { type: ["number", "string"], description: "Ходов осталось; пусто = бессрочно" },
+        food: { type: "number" }, craft: { type: "number" }, income: { type: "number" }, army: { type: "number" }, levy: { type: "number" }, growth: { type: "number" },
+        unity: { type: "number" }, unityPerTurn: { type: "number" }, cleric: { type: "number" }, treasury: { type: "number" }, store: { type: "number" },
+        loy: { ...estates, description: "Лояльность сословий в ход" }, source: { type: "string" }, note: { type: "string" } }, required: ["name"] },
+    },
+    construction: obj({
+      maxPerTurn: { type: "number", description: "Макс. построек за ход, 0 = без лимита." },
+      items: { type: "array", description: "Здания листа «Стройки» по названию; пишутся только изменённые поля.", items: { type: "object", properties: {
+        name: { type: "string" }, built: { type: "number" }, auto: { type: "number", description: "1 = в автостройке" }, prio: { type: "number" } }, required: ["name"] } },
+    }),
   },
   additionalProperties: false,
 };
@@ -106,7 +121,7 @@ const TOOLS = [
   },
   {
     name: "vpi_read_inputs", title: "Ячейки ввода", annotations: RO,
-    description: "Читает прямо из Google-таблицы ячейки, которые можно менять: регионы (сословия, лояльность, постройки), ресурсы, ручные кризисы, поправки лояльности, расходы хода, стартовые запасы, бюджет стройки. Формат ответа = формат vpi_write_inputs.",
+    description: "Читает прямо из Google-таблицы ячейки, которые можно менять: регионы (сословия, лояльность, постройки), ресурсы, ручные кризисы, поправки лояльности, расходы хода, стартовые запасы, бюджет стройки, накопленное единство, модификаторы, автостройку и «Построено». view — текущие казна, склад, фонд, клирика, единство (только чтение). Формат ответа = формат vpi_write_inputs.",
     inputSchema: obj({ state_id: stateId }, ["state_id"]),
     run: (a, api) => api.call("adminReadInputs", { stateId: a.state_id }),
   },
@@ -117,6 +132,21 @@ const TOOLS = [
     run: async (a, api) => {
       const r = await api.call("adminWriteInputs", { stateId: a.state_id, inputs: a.inputs });
       return r.ok ? { ok: true, ledger: r.ledger, warning: r.error } : r;
+    },
+  },
+  {
+    name: "vpi_parse_verdict", title: "Разобрать вердикт", annotations: RO,
+    description: "Разбирает текст вердикта администратора (блоки «Эффект:») в список операций для таблицы государства и показывает, что запишется. Ничего не меняет. Операции можно поправить и передать в vpi_apply_effects.",
+    inputSchema: obj({ state_id: stateId, text: { type: "string", description: "Вердикт целиком, как в VK." } }, ["state_id", "text"]),
+    run: (a, api) => api.call("adminParseEffects", { stateId: a.state_id, text: a.text }),
+  },
+  {
+    name: "vpi_apply_effects", title: "Применить эффекты", annotations: WRITE,
+    description: "Записывает эффекты вердикта одной правкой (журнал и откат vpi_undo_stat_edit). ops — операции из vpi_parse_verdict: stock {res: coins|craft|cleric, amount, all}, unity {amount}, loyalty {estate: -1|0..4, amount}, resource {index, amount}, people {estate, amount, region}, region {name, type, estates, loyalty}, regionLoyalty {region, estates, value}, modifier {mod}, debt {to, amount, res, perTurn}, autobuild {buildings, on}, build {building, count, region}.",
+    inputSchema: obj({ state_id: stateId, ops: { type: "array", maxItems: 60, items: { type: "object" } }, source: { type: "string", description: "Источник для модификаторов, по умолчанию «Вердикт, ход N»." } }, ["state_id", "ops"]),
+    run: async (a, api) => {
+      const r = await api.call("adminApplyEffects", { stateId: a.state_id, ops: a.ops, source: a.source });
+      return r.ok ? { ok: true, summary: r.summary, warnings: r.warnings, ledger: r.ledger } : r;
     },
   },
   {

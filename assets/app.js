@@ -888,9 +888,18 @@
     if (!$("#statsDialog").open) $("#statsDialog").showModal();
     try {
       if (DEMO) throw new Error("В демо-режиме таблицы не подключены.");
-      const { inputs } = await api.admin("adminReadInputs", { stateId });
-      $("#statsBody").innerHTML = statsFormHTML(inputs);
+      await reloadStatsBody();
     } catch (err) { $("#statsBody").innerHTML = `<div class="crisis">${esc(err.message)}</div>`; }
+  }
+  // Перечитать таблицу и перерисовать форму (после записи: у новых модификаторов появляются номера строк)
+  let statsInputs = null;
+  async function reloadStatsBody() {
+    const keepText = $("#fxText") ? $("#fxText").value : "";
+    const { inputs } = await api.admin("adminReadInputs", { stateId: statsState });
+    statsInputs = inputs;
+    $("#statsBody").innerHTML = statsFormHTML(inputs);
+    fx.ops = []; fx.unparsed = []; renderFx();
+    if (keepText && $("#fxText")) $("#fxText").value = keepText;
   }
   function regionRowHTML(g) {
     g = g || { name: "", type: "Город", estates: [0, 0, 0, 0, 0], loyalty: [50, 50, 50, 50, 50], buildings: "" };
@@ -903,8 +912,77 @@
       <td><button type="button" class="linklike" data-del-region aria-label="Удалить регион">×</button></td>
     </tr>`;
   }
+  const MOD_NUM = [["food", "Еда %"], ["craft", "Ремесло %"], ["income", "Доход %"], ["army", "Содержание армии %"], ["levy", "Призыв %"],
+    ["growth", "Прирост населения п.п."], ["unity", "Единство (пока действует)"], ["unityPerTurn", "Единство в ход"], ["cleric", "Клирика в ход"],
+    ["treasury", "Казна в ход"], ["store", "Склад в ход"]];
+  const MOD_TYPES = ["Постоянный", "Временный", "Проект"], MOD_STATUSES = ["АКТИВЕН", "ОТКЛЮЧЁН", "ЗАВЕРШЁН", "ИСТЁК"];
+  const RES7 = ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"];
+  const blankMod = (name = "") => ({ name, type: "Постоянный", status: "АКТИВЕН", turns: "", progress: "", progressStep: "", source: "Сайт", note: "",
+    food: 0, craft: 0, income: 0, army: 0, levy: 0, growth: 0, unity: 0, unityPerTurn: 0, loy: [0, 0, 0, 0, 0], cleric: 0, treasury: 0, store: 0 });
+  const opt = (list, cur) => list.map((v) => { const [val, label] = Array.isArray(v) ? v : [v, v]; return `<option value="${esc(val)}" ${String(val) === String(cur) ? "selected" : ""}>${esc(label)}</option>`; }).join("");
+  // Короткая сводка эффектов модификатора (как колонка «Эффекты» таблицы)
+  function modShort(m) {
+    const sg = (x) => (x > 0 ? "+" : "−") + String(Math.abs(x)).replace(".", ",");
+    const out = [];
+    MOD_NUM.forEach(([k, l]) => { const v = Number(m[k]) || 0; if (v) out.push(`${l.replace(/ %| п\.п\./, "")} ${sg(v)}${/%/.test(l) ? "%" : ""}`); });
+    EST.forEach((e, k) => { const v = Number(m.loy && m.loy[k]) || 0; if (v) out.push(`лоял. ${e.toLowerCase()} ${sg(v)}/ход`); });
+    return out.join(", ") || "без числовых эффектов";
+  }
+  function modCardHTML(m) {
+    m = m || blankMod();
+    return `<details class="modcard" data-row="${m.row || ""}">
+      <summary><span class="modcard__name">${esc(m.name || "Новый модификатор")}</span> <span class="modcard__st${m.status === "АКТИВЕН" ? " is-on" : ""}">${esc(m.status || "")}</span> <small>${esc(modShort(m))}</small></summary>
+      <div class="stats__grid">
+        <label>Название <input name="m_name" value="${esc(m.name)}"></label>
+        <label>Тип <select name="m_type">${opt(MOD_TYPES.includes(m.type) ? MOD_TYPES : [...MOD_TYPES, m.type], m.type)}</select></label>
+        <label>Статус <select name="m_status">${opt(MOD_STATUSES.includes(m.status) ? MOD_STATUSES : [...MOD_STATUSES, m.status], m.status)}</select></label>
+        <label>Ходов осталось <input name="m_turns" type="number" min="0" value="${esc(m.turns)}" placeholder="бессрочно"></label>
+        ${MOD_NUM.map(([k, l]) => `<label>${l} <input name="m_${k}" type="number" step="any" value="${Number(m[k]) || 0}"></label>`).join("")}
+        ${EST.map((e, k) => `<label>Лояльность ${e.toLowerCase()} в ход <input name="m_loy${k}" type="number" min="-100" max="100" value="${Number(m.loy && m.loy[k]) || 0}"></label>`).join("")}
+        <label>Прогресс % (проект) <input name="m_progress" type="number" min="0" max="100" value="${esc(m.progress)}"></label>
+        <label>Прогресс за ход <input name="m_progressStep" type="number" value="${esc(m.progressStep)}"></label>
+        <label>Источник <input name="m_source" value="${esc(m.source)}"></label>
+      </div>
+      <label class="stats__name">Описание / при завершении <textarea name="m_note" rows="2">${esc(m.note)}</textarea></label>
+      <button type="button" class="linklike" data-del-mod>Удалить модификатор</button>
+    </details>`;
+  }
+  function readModCard(el) {
+    const q = (n) => el.querySelector(`[name="${n}"]`).value;
+    const numOrBlank = (v) => (String(v).trim() === "" ? "" : Number(v) || 0);
+    const m = { name: q("m_name").trim(), type: q("m_type"), status: q("m_status"), turns: numOrBlank(q("m_turns")), progress: numOrBlank(q("m_progress")), progressStep: numOrBlank(q("m_progressStep")),
+      source: q("m_source"), note: q("m_note"), loy: [0, 1, 2, 3, 4].map((k) => Number(q("m_loy" + k)) || 0) };
+    if (el.dataset.row) m.row = Number(el.dataset.row);
+    MOD_NUM.forEach(([k]) => { m[k] = Number(q("m_" + k)) || 0; });
+    return m;
+  }
+  function constructionHTML(c) {
+    if (!c || !c.items.length) return "";
+    const cats = [];
+    c.items.forEach((it) => { let g = cats.find((x) => x.cat === it.cat); if (!g) cats.push((g = { cat: it.cat, items: [] })); g.items.push(it); });
+    return `<section class="section"><h3>Автостройка и постройки</h3>
+      <p class="login__hint">«Авто» включает здание в автостройку, меньший приоритет строится раньше. Бюджет автостройки задаётся выше, в «Расходах хода».</p>
+      <div class="stats__grid"><label>Макс. построек за ход (0 = без лимита) <input name="maxPerTurn" type="number" min="0" value="${c.maxPerTurn || 0}"></label></div>
+      ${cats.map((g) => `<details class="bldcat"><summary>${esc(g.cat || "Здания")} <small>авто: ${g.items.filter((x) => x.auto).length}, построено видов: ${g.items.filter((x) => x.built > 0).length}</small></summary>
+        <table class="stats-table bld-table"><thead><tr><th>Здание</th><th>Авто</th><th>Приор.</th><th>Построено</th></tr></thead><tbody>
+        ${g.items.map((it) => `<tr data-bname="${esc(it.name)}"><td>${esc(it.name)}</td><td><input type="checkbox" name="b_auto" ${it.auto ? "checked" : ""} aria-label="Авто: ${esc(it.name)}"></td>
+          <td><input type="number" name="b_prio" min="0" value="${it.prio}" aria-label="Приоритет: ${esc(it.name)}"></td><td><input type="number" name="b_built" min="0" value="${it.built}" aria-label="Построено: ${esc(it.name)}"></td></tr>`).join("")}
+        </tbody></table></details>`).join("")}
+    </section>`;
+  }
   function statsFormHTML(i) {
+    const vw = i.view || {};
     return `
+      <p class="stats__now">Сейчас (после хода ${fmt(vw.turn || 0)}): казна <b>${fmt(Math.round(vw.treasury || 0))}</b> · склад <b>${fmt(Math.round(vw.warehouse || 0))}</b> · фонд стройки <b>${fmt(Math.round(vw.fundCraft || 0))} р / ${fmt(Math.round(vw.fundCoins || 0))} м</b> · клирика <b>${fmt(vw.clerics || 0)}</b> · единство <b>${fmt(Math.round((vw.unity || 0) * 10) / 10)}%</b></p>
+      <section class="section fx"><h3>Эффекты вердикта</h3>
+        <p class="login__hint">Вставьте вердикт целиком: сайт найдёт блоки «Эффект:» и предложит изменения. Проверьте, поправьте цифры, снимите лишние галочки и нажмите «Применить эффекты». Можно добавить эффект и вручную. Всё попадёт в «Историю правок» и откатывается.</p>
+        <textarea id="fxText" rows="5" placeholder="#Заголовок вердикта&#10;…&#10;Эффект:&#10;-200 золота&#10;-7 Единства"></textarea>
+        <div class="fx__bar">
+          <button type="button" class="btn btn--ghost" id="fxParse">Разобрать вердикт</button>
+          <select id="fxAddKind" aria-label="Тип эффекта"><option value="">Добавить эффект вручную…</option>${opt(Object.entries(FX_KINDS).filter(([k]) => k !== "regionLoyalty"), "")}</select>
+        </div>
+        <div id="fxList"></div>
+      </section>
       <label class="stats__name">Название государства <input name="sname" value="${esc(i.name)}"></label>
       <section class="section"><h3>Регионы</h3>
         <div class="stats__scroll"><table class="stats-table">
@@ -932,6 +1010,7 @@
           <label>Из казны (монеты) <input name="ccoins" type="number" min="0" value="${i.costs.coins}"></label>
           <label>Клирики потрачено <input name="ccleric" type="number" min="0" step="0.01" value="${i.costs.cleric}"></label>
           <label>Бюджет стройки, % <input name="budget" type="number" min="0" max="100" value="${i.budgetPct}"></label>
+          <label title="Разовые прибавки и потери единства от вердиктов. Итоговое единство = база + это число + модификаторы.">Единство: накоплено от вердиктов <input name="unity" type="number" step="any" value="${i.unity || 0}"></label>
         </div>
       </section>
       <section class="section"><h3>Поправки лояльности на этот ход</h3>
@@ -939,8 +1018,79 @@
       </section>
       <section class="section"><h3>Кризисы, включаемые вручную</h3>
         <div class="stats__grid">${i.crises.map((c, k) => `<label class="check"><input name="cr${k}" type="checkbox" ${c.on ? "checked" : ""}> ${esc(c.name)}</label>`).join("")}</div>
-      </section>`;
+      </section>
+      ${i.modifiers ? `<section class="section"><h3>Модификаторы (указы и эффекты)</h3>
+        <p class="login__hint">Долгие эффекты: проценты к еде, ремеслу, доходу, прибавки в ход, временные и проекты. Считаются только АКТИВНЫЕ. Нажмите на строку, чтобы изменить.</p>
+        <div id="modRows">${i.modifiers.map(modCardHTML).join("")}</div>
+        <button type="button" class="btn btn--ghost" id="addMod">Добавить модификатор</button>
+      </section>` : `<section class="section"><h3>Модификаторы</h3><p class="login__hint">В этой таблице нет листа «Модификаторы».</p></section>`}
+      ${constructionHTML(i.construction)}`;
   }
+
+  /* ---------- эффекты вердикта: предпросмотр и применение ---------- */
+  const FX_KINDS = { stock: "Казна / склад / клирика", unity: "Единство", loyalty: "Лояльность (поправка в конце хода)", modifier: "Модификатор (%, в ход, срок)", region: "Регион (новый или правка)",
+    regionLoyalty: "Лояльность региона", people: "Население сословия", resource: "Ресурс (источники)", debt: "Долг", autobuild: "Автостройка", build: "Постройка" };
+  const fx = { ops: [], unparsed: [] };
+  function newOp(kind) {
+    const cap = statsInputs && statsInputs.regions[0] ? statsInputs.regions[0].name : "";
+    return { stock: { kind, res: "coins", amount: 0 }, unity: { kind, amount: 0 }, loyalty: { kind, estate: -1, amount: 0 }, modifier: { kind, mod: blankMod("") },
+      region: { kind, name: "", type: "Провинция", estates: [0, 0, 0, 0, 0], loyalty: [50, 50, 50, 50, 50] }, regionLoyalty: { kind, region: cap, estates: [0, 1, 2, 3, 4], value: 50 },
+      people: { kind, estate: 0, amount: 0, region: cap }, resource: { kind, index: 0, amount: 1 }, debt: { kind, to: "", amount: 0, res: "craft", perTurn: 0 },
+      autobuild: { kind, buildings: [], on: true }, build: { kind, building: "", count: 1, region: cap } }[kind];
+  }
+  function fxFieldsHTML(op, i) {
+    const f = (path, label, val, type = "number", extra = "") => `<label>${label} <input data-fx="${i}" data-f="${path}" type="${type}" value="${esc(val ?? "")}" ${extra}></label>`;
+    const sel = (path, label, list, cur) => `<label>${label} <select data-fx="${i}" data-f="${path}">${opt(list, cur)}</select></label>`;
+    const regs = (statsInputs ? statsInputs.regions.map((g) => g.name) : []);
+    const estOpts = EST.map((e, k) => [k, e]);
+    switch (op.kind) {
+      case "stock": return sel("res", "Что", [["coins", "Казна (монеты)"], ["craft", "Склад (ремесло)"], ["cleric", "Клирика"]], op.res) + (op.all ? `<label class="check"><input type="checkbox" data-fx="${i}" data-f="all" checked> списать всё, что есть</label>` : f("amount", "Сколько (минус = потеря)", op.amount, "number", 'step="any"'));
+      case "unity": return f("amount", "Единство ±", op.amount, "number", 'step="any"');
+      case "loyalty": return sel("estate", "Сословие", [[-1, "Все сословия"], ...estOpts], op.estate) + f("amount", "Поправка ±", op.amount);
+      case "resource": return sel("index", "Ресурс", RES7.map((r, k) => [k, r]), op.index) + f("amount", "Источников ±", op.amount);
+      case "people": return sel("region", "Регион", regs, op.region) + sel("estate", "Сословие", estOpts, op.estate) + f("amount", "Людей ±", op.amount);
+      case "regionLoyalty": return sel("region", "Регион", regs, op.region) + f("value", "Лояльность, %", op.value, "number", 'min="0" max="100"');
+      case "region": return f("name", "Название", op.name, "text") + f("type", "Тип", op.type, "text") +
+        EST.map((e, k) => f("estates." + k, e + ", чел.", op.estates ? op.estates[k] : "", "number", 'min="0" placeholder="не менять"')).join("") +
+        EST.map((e, k) => f("loyalty." + k, "Лояльность " + e.toLowerCase(), op.loyalty ? op.loyalty[k] : "", "number", 'min="0" max="100" placeholder="не менять"')).join("");
+      case "modifier": return f("mod.name", "Название", op.mod.name, "text") + sel("mod.type", "Тип", MOD_TYPES, op.mod.type) + f("mod.turns", "Ходов (пусто = бессрочно)", op.mod.turns, "number", 'min="0"') +
+        MOD_NUM.map(([k, l]) => f("mod." + k, l, op.mod[k], "number", 'step="any"')).join("") + EST.map((e, k) => f("mod.loy." + k, "Лояльность " + e.toLowerCase() + " в ход", op.mod.loy[k])).join("");
+      case "debt": return f("to", "Перед кем", op.to, "text") + f("amount", "Сумма долга", op.amount, "number", 'min="0"') + sel("res", "Чем", [["craft", "Ремесло"], ["coins", "Монеты"]], op.res) + f("perTurn", "Выплата в ход (0 = не платить)", op.perTurn, "number", 'min="0"');
+      case "autobuild": return f("buildings", "Здания через запятую", (op.buildings || []).join(", "), "text", 'list="fxBldList"') + `<label class="check"><input type="checkbox" data-fx="${i}" data-f="on" ${op.on !== false ? "checked" : ""}> включить (снять = выключить)</label>`;
+      case "build": return f("building", "Здание", op.building, "text", 'list="fxBldList"') + f("count", "Сколько", op.count) + sel("region", "Регион", regs, op.region);
+      default: return "";
+    }
+  }
+  function renderFx(summary, warnings) {
+    const box = $("#fxList"); if (!box) return;
+    const names = statsInputs && statsInputs.construction ? statsInputs.construction.items.map((x) => x.name) : [];
+    box.innerHTML = (fx.ops.length ? `<datalist id="fxBldList">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>` + fx.ops.map((op, i) => `
+      <div class="fxop${op.off ? " is-off" : ""}">
+        <label class="check fxop__head"><input type="checkbox" data-fx-on="${i}" ${op.off ? "" : "checked"}> <b>${esc(FX_KINDS[op.kind] || op.kind)}</b>${op.guess ? ' <small class="fxop__guess">найдено в тексте, проверьте</small>' : ""}</label>
+        <div class="stats__grid">${fxFieldsHTML(op, i)}</div>
+        ${op.src ? `<small class="fxop__src">«${esc(String(op.src).slice(0, 200))}»</small>` : ""}
+      </div>`).join("") : "") +
+      (fx.unparsed.length ? `<div class="fx__unparsed"><b>Не понял эти строки</b> (добавьте вручную, если в них есть эффект):<ul>${fx.unparsed.map((l) => `<li>${esc(l.slice(0, 200))}</li>`).join("")}</ul></div>` : "") +
+      (summary && summary.length ? `<div class="fx__summary"><b>Что запишется:</b><ul>${summary.map((l) => `<li>${esc(l)}</li>`).join("")}</ul></div>` : "") +
+      (warnings && warnings.length ? `<div class="crisis">${warnings.map(esc).join("<br>")}</div>` : "") +
+      (fx.ops.length ? `<div class="fx__bar"><label>Источник <input id="fxSource" placeholder="Вердикт, ход N"></label><button type="button" class="btn" id="fxApply">Применить эффекты</button></div>` : "");
+  }
+  function setPath(op, path, value) {
+    const parts = path.split("."); let o = op;
+    while (parts.length > 1) { const k = parts.shift(); if (o[k] === null || o[k] === undefined) o[k] = [null, null, null, null, null]; o = o[k]; }
+    o[parts[0]] = value;
+  }
+  $("#statsBody").addEventListener("change", (e) => {
+    const on = e.target.dataset.fxOn;
+    if (on !== undefined) { fx.ops[on].off = !e.target.checked; e.target.closest(".fxop").classList.toggle("is-off", !e.target.checked); return; }
+    const i = e.target.dataset.fx; if (i === undefined) return;
+    const op = fx.ops[i], path = e.target.dataset.f;
+    let v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+    if (path === "buildings") v = String(v).split(",").map((x) => x.trim()).filter(Boolean);
+    else if (e.target.type === "number") v = String(v).trim() === "" ? (/^(estates|loyalty)\./.test(path) ? null : "") : Number(v);
+    else if (e.target.tagName === "SELECT" && /^(estate|index)$/.test(path)) v = Number(v);
+    setPath(op, path, v);
+  });
   $("#statsBody").addEventListener("click", (e) => {
     if (e.target.id === "addRegion") {
       const rows = $("#regionRows");
@@ -948,7 +1098,46 @@
       rows.insertAdjacentHTML("beforeend", regionRowHTML());
     }
     if (e.target.closest("[data-del-region]")) e.target.closest("tr").remove();
+    if (e.target.id === "addMod") {
+      $("#modRows").insertAdjacentHTML("beforeend", modCardHTML(blankMod("")));
+      $("#modRows").lastElementChild.open = true;
+      $("#modRows").lastElementChild.querySelector('[name="m_name"]').focus();
+    }
+    if (e.target.closest("[data-del-mod]")) e.target.closest(".modcard").remove();
+    if (e.target.id === "fxParse") parseFx();
+    if (e.target.id === "fxApply") applyFx();
   });
+  $("#statsBody").addEventListener("change", (e) => {
+    if (e.target.id !== "fxAddKind" || !e.target.value) return;
+    fx.ops.push(newOp(e.target.value)); e.target.value = ""; renderFx();
+  });
+  async function parseFx() {
+    const text = $("#fxText").value;
+    if (!text.trim()) { $("#statsMsg").textContent = "Вставьте текст вердикта."; return; }
+    $("#statsMsg").textContent = "Разбираю вердикт…";
+    try {
+      const res = await api.admin("adminParseEffects", { stateId: statsState, text });
+      fx.ops = res.ops; fx.unparsed = res.unparsed || [];
+      renderFx(res.summary, res.warnings);
+      $("#statsMsg").textContent = fx.ops.length ? `Найдено эффектов: ${fx.ops.length}. Проверьте и нажмите «Применить эффекты».` : "Эффектов не нашёл: добавьте их вручную.";
+    } catch (err) { $("#statsMsg").textContent = err.message; }
+  }
+  async function applyFx() {
+    const ops = fx.ops.filter((o) => !o.off).map(({ off, ...o }) => o);
+    if (!ops.length) { $("#statsMsg").textContent = "Не выбрано ни одного эффекта."; return; }
+    const btn = $("#fxApply"); btn.disabled = true;
+    $("#statsMsg").textContent = "Записываю эффекты и пересчитываю…";
+    try {
+      const res = await api.admin("adminApplyEffects", { stateId: statsState, ops, source: $("#fxSource").value });
+      if (!res.ok) throw new Error(res.error || "Не записано.");
+      state.ledgers.delete(statsState);
+      $("#fxText").value = "";
+      await reloadStatsBody();
+      renderFx(res.summary, res.warnings);
+      $("#statsMsg").textContent = (res.error || "Эффекты записаны. Таблица пересчитана, сайт обновлён.") + " Откатить можно в «Истории правок».";
+      reloadPublic().then(() => { if (state.selected === statsState) renderPanel(state.byId.get(statsState)); });
+    } catch (err) { $("#statsMsg").textContent = err.message; btn.disabled = false; }
+  }
   $("#statsClose").addEventListener("click", () => $("#statsDialog").close());
   $("#statsHistory").addEventListener("click", () => { $("#statsDialog").close(); openHistory("stats", statsState); });
   $("#statsForm").addEventListener("submit", async (e) => {
@@ -970,11 +1159,21 @@
       loyaltyDelta: [0, 1, 2, 3, 4].map((k) => ({ value: Number(val("ld" + k)) || 0 })),
       crises: [0, 1, 2, 3].map((k) => ({ on: !!(f.elements["cr" + k] && f.elements["cr" + k].checked) })),
     };
+    if (f.elements.unity) inputs.unity = Number(val("unity")) || 0;
+    if ($("#modRows")) {
+      const mods = [...$("#modRows").children].map(readModCard);
+      if (mods.some((m) => !m.name)) { $("#statsMsg").textContent = "У модификатора нет названия: впишите его или удалите строку."; return; }
+      inputs.modifiers = mods;
+    }
+    const brows = [...$("#statsBody").querySelectorAll("[data-bname]")];
+    if (brows.length) inputs.construction = { maxPerTurn: Number(val("maxPerTurn")) || 0, items: brows.map((tr) => ({ name: tr.dataset.bname,
+      auto: tr.querySelector('[name="b_auto"]').checked ? 1 : 0, prio: Number(tr.querySelector('[name="b_prio"]').value) || 100, built: Number(tr.querySelector('[name="b_built"]').value) || 0 })) };
     const btn = $("#statsSave"); btn.disabled = true;
     $("#statsMsg").textContent = "Записываю и пересчитываю…";
     try {
       const res = await api.admin("adminWriteInputs", { stateId: statsState, inputs });
       state.ledgers.delete(statsState);
+      await reloadStatsBody().catch(() => {});
       await reloadPublic();
       $("#statsMsg").textContent = res.error || "Записано. Таблица пересчитана, сайт обновлён.";
       if (state.selected === statsState) renderPanel(state.byId.get(statsState));
