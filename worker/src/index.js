@@ -853,7 +853,7 @@ async function readInputs(env, r) {
       crises: MANUAL_CRISES.map((name, i) => ({ name, on: cell(v[3], i) === "ДА" })),
       loyaltyDelta: ESTATES.map((name, i) => ({ name, value: num(cell(v[4], i)) })),
       costs: { cleric: num(cell(v[5], 0)), craft: num(cell(v[6], 0)), coins: num(cell(v[6], 1)) },
-      budgetPct: num(cell(v[7], 0)) || 30,
+      budgetPct: num(cell(v[7], 0)),   // пустая ячейка = 0%, как в движке
       stocks: { ...Object.fromEntries(Object.entries(STOCK_CELLS).map(([k, j]) => [k, num(cell(v[8], 0, j))])), clerics: num(cell(v[9], 0)) },
     },
   };

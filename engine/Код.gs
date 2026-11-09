@@ -613,7 +613,7 @@ function fillBuildingsSheet(ss) {
   // Панель автостройки (светлые ячейки — ввод)
   setPanel(ws, 3, 11, 7, 7);
   stCell(ws, 3, 11, 7, "АВТОСТРОЙКА", { font: FONT_TITLE, size: 11, bold: true, color: C.gold });
-  const auto = [[4, "Бюджет, % дохода", 30, '0"%"', true], [5, "Фонд сейчас", '=FIXED(Расчёты!B156,0)&" р · "&FIXED(Расчёты!B157,0)&" м"'],
+  const auto = [[4, "Бюджет, % дохода", 0, '0"%"', true], [5, "Фонд сейчас", '=FIXED(Расчёты!B156,0)&" р · "&FIXED(Расчёты!B157,0)&" м"'],
     [6, "+ в этом ходу", '="+"&FIXED(Расчёты!B158,0)&" р · +"&FIXED(Расчёты!B159,0)&" м"', null, false, C.green],
     [7, "Доступно", '=FIXED(Расчёты!B160,0)&" р · "&FIXED(Расчёты!B161,0)&" м"', null, false, C.gold],
     [8, "Макс. построек за ход", 0, '0;0;"без лимита"', true]];
@@ -832,6 +832,7 @@ function fillCalcSheet(ss) {
    [157, "Фонд стройки сейчас: монеты", "=INDEX('Журнал'!J:J,MATCH(9^9,'Журнал'!B:B))"], [158, "Ремесло в фонд за ход", "=B26*B155/100"],
    [159, "Монеты в фонд за ход", "=B31*B155/100"], [160, "Доступно ремесла", "=B156+B158"], [161, "Доступно монет", "=B157+B159"]
   ].forEach(([r, n, v]) => { ws.getRange(r, 1).setValue(n).setFontFamily(FONT_BODY); if (typeof v === "string") ws.getRange(r, 2).setFormula(F(v)); else ws.getRange(r, 2).setValue(v); ws.getRange(r, 1, 1, 2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
+  ws.getRange("B155").setNumberFormat('0"%"');   // бюджет хранится числом 0-100, а не долей: 30 = 30%
 
   [300, 140, 200, 100].forEach((w, i) => ws.setColumnWidth(i + 1, w)); paintParchment(ws, 215, 6, C.parchmentDark);
   // Ручные поля (кризисы 70-73, поправки лояльности, расходы хода) — подсветка как ввод
@@ -1407,7 +1408,7 @@ function findSetting(bld, lastB, labelPart, def, max) {
   return (v === "" || isNaN(n) || n < 0 || (max !== undefined && n > max)) ? def : n;
 }
 
-function findBudgetPct(bld, lastB) { return findSetting(bld, lastB, "Бюджет стройки", 30, 100); }
+function findBudgetPct(bld, lastB) { return findSetting(bld, lastB, "Бюджет стройки", 0, 100); }
 
 // Ресурсы в колонке «ТРЕБУЕТ»: «Соль 1», «уголь 1, железо 1», «Благов. 2 Железо 2», «Драг камни 1»…
 // Число — сколько источников ресурса должно быть на листе «Ресурсы» (ресурс не тратится).
