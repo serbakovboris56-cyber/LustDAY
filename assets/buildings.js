@@ -671,18 +671,35 @@
         return ty - H - (top !== "flat" ? r * 0.8 : 1.4);
       }
       const H = (top === "spire" ? ch * 1.7 : ch) * (goth && rkind !== "thatch" ? (delf ? 1.5 : 1.3) : 1);
-      const claw = (sg, k, hk) => { g.beginPath(); g.moveTo(x + sg * r * (k + 0.28), ty + 0.3); g.quadraticCurveTo(x + sg * r * (k + 1.05), ty - hk * 0.45, x + sg * r * (k + 0.2), ty - hk); g.quadraticCurveTo(x + sg * r * (k + 0.5), ty - hk * 0.4, x + sg * r * (k - 0.22), ty + 0.2); g.closePath(); g.fillStyle = "#211D2C"; g.fill(); g.save(); g.lineWidth = 0.13; g.stroke(); g.restore(); lin(x + sg * r * (k + 0.62), ty - hk * 0.42, x + sg * r * (k + 0.24), ty - hk * 0.94, "rgba(150, 130, 200, 0.75)", 0.07); };
-      const crown = delf && rkind !== "thatch" && h >= 5, hk = Math.min(H * 0.55, r * 2.1 + 0.8);
-      if (crown) { claw(-1, 0.25, hk * 0.8); claw(1, 0.25, hk * 0.8); }
-      cone(x, ty, r * (top === "spire" ? 1.08 : 1.25) * (delf ? 0.86 : 1), H, rf, rd, rkind);
-      if (crown) {
-        // корона из когтей вокруг шпиля и колдовской огонь на острие
-        claw(-1, 0.85, hk); claw(1, 0.85, hk);
-        lin(x, ty - H + 0.1, x, ty - H - 1.1, IRON, 0.17);
-        for (const sg of [-1, 1]) { g.save(); g.strokeStyle = IRON; g.lineWidth = 0.15; g.beginPath(); g.moveTo(x, ty - H - 0.1); g.quadraticCurveTo(x + sg * 0.5, ty - H - 0.2, x + sg * 0.42, ty - H - 0.95); g.stroke(); g.restore(); }
-        if (top === "spire" || h >= 9) { glow(x, ty - H - 1.2, 1.5, "rgba(190, 120, 255, 0.85)"); g.save(); g.fillStyle = "#E8D0FF"; g.beginPath(); g.arc(x, ty - H - 1.25, 0.2, 0, Math.PI * 2); g.fill(); g.restore(); }
-        return ty - H - 1.4;
+      if (delf && rk !== "thatch" && rk !== S.thatch) {
+        // Башня тёмных эльфов без шпиля: воротник с шипами, корона длинных игл к небу и колдовская сфера внутри
+        const R1 = r * 1.14, hn = Math.max(r * 3.0, H * 0.8), w = Math.max(0.18, r * 0.17), DK = "#211D2C";
+        const needle = (bx, by, hh, lean, ww = w) => {
+          g.beginPath(); g.moveTo(bx - ww, by); g.quadraticCurveTo(bx + lean - ww * 0.2, by - hh * 0.5, bx + lean * 0.3, by - hh); g.quadraticCurveTo(bx + lean + ww * 1.3, by - hh * 0.45, bx + ww, by); g.closePath();
+          g.fillStyle = DK; g.fill(); g.save(); g.lineWidth = 0.13; g.stroke(); g.restore();
+          lin(bx + lean * 0.62, by - hh * 0.42, bx + lean * 0.36, by - hh * 0.9, "rgba(150, 130, 200, 0.7)", 0.07);
+        };
+        const thorn = (bx, by, sg, L) => { g.beginPath(); g.moveTo(bx, by + 0.3); g.quadraticCurveTo(bx + sg * L * 0.9, by + 0.1, bx + sg * L, by - L * 0.95); g.quadraticCurveTo(bx + sg * L * 0.45, by - 0.2, bx, by - 0.35); g.closePath(); g.fillStyle = DK; g.fill(); g.save(); g.lineWidth = 0.11; g.stroke(); g.restore(); };
+        if (h >= 9) {
+          // кольцо шипов на середине высокой башни
+          const ym = y - h * 0.56;
+          thorn(x - r, ym, -1, r * 0.75); thorn(x + r, ym, 1, r * 0.75);
+          g.save(); g.beginPath(); g.ellipse(x, ym, r * 1.04, r * 0.52, 0, 0, Math.PI, false); g.lineWidth = 0.62; g.strokeStyle = LINE; g.stroke(); g.lineWidth = 0.36; g.strokeStyle = "#3C3650"; g.stroke(); g.restore();
+          thorn(x - r * 0.5, ym + r * 0.42, -1, r * 0.55); thorn(x + r * 0.5, ym + r * 0.42, 1, r * 0.55);
+        }
+        const by = ty - R1 * 0.4;
+        needle(x - R1 * 0.5, by, hn * 0.84, -r * 0.3); needle(x + R1 * 0.5, by, hn * 0.84, r * 0.3); needle(x, by - R1 * 0.08, hn * 1.1, 0, w * 1.15);
+        thorn(x - R1, ty + 0.2, -1, r * 0.7); thorn(x + R1, ty + 0.2, 1, r * 0.7);
+        g.beginPath(); g.moveTo(x - R1, ty); g.lineTo(x - r, ty + 1.0); g.ellipse(x, ty + 1.0, r, r * 0.5, 0, Math.PI, 0, true); g.lineTo(x + R1, ty); g.closePath(); g.fillStyle = grad(x - R1, x + R1, "#1E1A28", "#3C3650"); g.fill(); g.stroke();
+        g.beginPath(); g.ellipse(x, ty, R1, R1 * 0.5, 0, 0, Math.PI * 2); g.fillStyle = "#2A2636"; g.fill(); g.stroke();
+        const oy = ty - r * 0.75, orr = r * 0.42;
+        glow(x, oy, r * 1.7, "rgba(190, 120, 255, 0.6)");
+        g.beginPath(); g.arc(x, oy, orr, 0, Math.PI * 2); const og = g.createRadialGradient(x - orr * 0.3, oy - orr * 0.35, 0, x, oy, orr); og.addColorStop(0, "#F1E2FF"); og.addColorStop(0.5, "#B66CFF"); og.addColorStop(1, "#6A2CB8"); g.fillStyle = og; g.fill(); g.save(); g.lineWidth = 0.13; g.stroke(); g.restore();
+        needle(x - R1 * 0.96, ty + 0.1, hn, -r * 0.5); needle(x + R1 * 0.96, ty + 0.1, hn, r * 0.5);
+        needle(x - R1 * 0.42, ty + R1 * 0.42, hn * 0.45, -r * 0.2, w * 0.85); needle(x + R1 * 0.42, ty + R1 * 0.42, hn * 0.45, r * 0.2, w * 0.85);
+        return ty - hn - 0.2;
       }
+      cone(x, ty, r * (top === "spire" ? 1.08 : 1.25), H, rf, rd, rkind);
       if (goth && rkind !== "thatch") { lin(x, ty - H + 0.1, x, ty - H - 1.0, IRON, 0.17); g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, ty - H - 1.4); g.lineTo(x - 0.17, ty - H - 0.95); g.lineTo(x + 0.17, ty - H - 0.95); g.closePath(); g.fill(); g.restore(); if (top === "spire" && h >= 9) { bat(x + r + 2.6, ty - H * 0.55, 0.6); bat(x - r - 2.2, ty - H * 0.9, 0.45); } return ty - H - 1.4; }
       return ty - H;
     }
@@ -869,15 +886,15 @@
       col = col || color;
       if (east) { lin(x - 0.2, y - hh + 0.3, x + 2.6, y - hh + 0.3, S.woodPlank[1], 0.4); poly([[x + 0.1, y - hh + 0.4], [x + 2.4, y - hh + 0.4], [x + 2.4, y - hh + 5], [x + 1.25, y - hh + 4.2], [x + 0.1, y - hh + 5]], col); return; }
       if (delf) {
-        // знамя друкаев: длинное полотнище на перекладине, низ зубцами, руна и клинок-навершие
-        col = gothTint(col); lin(x, y, x, y - hh - 0.4, IRON, 0.34);
+        // знамя тёмных эльфов: красное полотнище на перекладине, низ зубцами, белый полумесяц и клинок-навершие
+        col = "#B0202E"; lin(x, y, x, y - hh - 0.4, IRON, 0.34);
         const t = y - hh;
         g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, t - 1.7); g.quadraticCurveTo(x + 0.55, t - 1.0, x + 0.2, t - 0.35); g.lineTo(x - 0.2, t - 0.35); g.quadraticCurveTo(x - 0.55, t - 1.0, x, t - 1.7); g.fill(); g.restore();
         lin(x - 0.5, t + 0.1, x + 2.9, t + 0.1, IRON, 0.26);
         const F = [[x + 0.25, t + 0.2], [x + 2.65, t + 0.2], [x + 2.65, t + 4.0], [x + 2.05, t + 3.3], [x + 1.45, t + 4.9], [x + 0.85, t + 3.3], [x + 0.25, t + 4.0]];
         poly(F, col);
         g.save(); path(F); g.clip(); g.fillStyle = "rgba(14, 8, 22, 0.35)"; g.fillRect(x + 0.25, t + 0.2, 0.42, 5); g.fillRect(x + 2.23, t + 0.2, 0.42, 5);
-        g.strokeStyle = "rgba(232, 216, 255, 0.9)"; g.lineWidth = 0.15; g.beginPath(); g.moveTo(x + 1.45, t + 0.8); g.lineTo(x + 1.45, t + 2.9); g.moveTo(x + 0.95, t + 1.3); g.lineTo(x + 1.45, t + 1.9); g.lineTo(x + 1.95, t + 1.3); g.moveTo(x + 1.05, t + 2.5); g.lineTo(x + 1.85, t + 2.5); g.stroke(); g.restore();
+        g.fillStyle = "#F4EEF2"; g.beginPath(); g.arc(x + 1.4, t + 1.85, 0.82, 0, Math.PI * 2); g.fill(); g.fillStyle = col; g.beginPath(); g.arc(x + 1.72, t + 1.7, 0.7, 0, Math.PI * 2); g.fill(); g.restore();
         return;
       }
       if (goth) {
