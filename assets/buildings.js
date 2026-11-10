@@ -886,8 +886,8 @@
       col = col || color;
       if (east) { lin(x - 0.2, y - hh + 0.3, x + 2.6, y - hh + 0.3, S.woodPlank[1], 0.4); poly([[x + 0.1, y - hh + 0.4], [x + 2.4, y - hh + 0.4], [x + 2.4, y - hh + 5], [x + 1.25, y - hh + 4.2], [x + 0.1, y - hh + 5]], col); return; }
       if (delf) {
-        // знамя тёмных эльфов: красное полотнище на перекладине, низ зубцами, белый полумесяц и клинок-навершие
-        col = "#B0202E"; lin(x, y, x, y - hh - 0.4, IRON, 0.34);
+        // знамя тёмных эльфов: малиново-розовое полотнище на перекладине, низ зубцами, белый полумесяц и клинок-навершие
+        col = "#C2356A"; lin(x, y, x, y - hh - 0.4, IRON, 0.34);
         const t = y - hh;
         g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, t - 1.7); g.quadraticCurveTo(x + 0.55, t - 1.0, x + 0.2, t - 0.35); g.lineTo(x - 0.2, t - 0.35); g.quadraticCurveTo(x - 0.55, t - 1.0, x, t - 1.7); g.fill(); g.restore();
         lin(x - 0.5, t + 0.1, x + 2.9, t + 0.1, IRON, 0.26);
