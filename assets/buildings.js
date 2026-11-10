@@ -1,7 +1,8 @@
-/* Рисунки для карты: города, деревни и все 96 зданий «Великой книги строек» в четырёх стилях —
- * западноевропейском, славянском, азиатском и вампирском готическом. Стиль выбирает администратор
- * для каждого государства. У вампирского стиля каждая постройка нарисована отдельно: рецепты лежат
- * в buildings-goth.js и подменяют общие через VPIStyleRecipes.
+/* Рисунки для карты: города, деревни и все 96 зданий «Великой книги строек» в пяти стилях —
+ * западноевропейском, славянском, азиатском, вампирском готическом и тёмных эльфов. Стиль выбирает
+ * администратор для каждого государства. У вампирского стиля каждая постройка нарисована отдельно:
+ * рецепты лежат в buildings-goth.js и подменяют общие через VPIStyleRecipes. Стиль тёмных эльфов (delf)
+ * строится на том же готическом семействе: своя ветка в наборе деталей и реквизит в buildings-delf.js.
  *
  * Всё рисуется кодом в маленькие холсты (спрайты) один раз и дальше только копируется на плитки карты.
  * Рисунок в «единицах» (1 единица = RES пикселей спрайта), изометрия 2:1, свет слева сверху.
@@ -13,7 +14,8 @@
 
   // пикселей спрайта на единицу рисунка (с запасом под ретину и зум ×2); крупный каталог может попросить больше
   const RES = (typeof window !== "undefined" && window.VPI_SPRITE_RES) || 5;
-  const LINE = "#3A2A1D";        // рисованная обводка, как у ассетов администрации
+  const LINE_BASE = "#3A2A1D";   // рисованная обводка, как у ассетов администрации
+  const LINE = LINE_BASE;
   const I = 0.5;                 // наклон изометрии
   const sprites = new Map();
 
@@ -25,7 +27,7 @@
 
   /* ---------------- стили ---------------- */
 
-  const STYLES = { west: "Западноевропейский", slav: "Славянский", east: "Азиатский", goth: "Вампирский готический" };
+  const STYLES = { west: "Западноевропейский", slav: "Славянский", east: "Азиатский", goth: "Вампирский готический", delf: "Тёмных эльфов" };
   const DEFAULT_STYLE = "west";
   // Пары [светлая сторона, тень]. Ключи одинаковые у всех стилей, так что рецепт здания пишется один раз.
   // Цвета матовые, «рисованные»: заливка ровная, объём даёт фактура (черепица, солома, доски, камень) и тёмная сторона.
@@ -56,12 +58,21 @@
       dome: ["#4E7470", "#2A4442"], dome2: ["#742C34", "#42171D"], rock: ["#8E8A90", "#5E5A62"], slateHi: "#66627A", smoke: "rgba(90, 84, 96, 0.55)",
       stoneT: "#8E8896", water: "#3E6276", waterL: "#8FB4C4", woodPlank: ["#6E5240", "#3C2A20"], tent: ["#8A7E8C", "#544A58"], tentR: ["#7A1E26", "#4A1016"],
       field1: "#A8935C", field2: "#6E5E3A", field3: "#66704A", tree: "#3E5244", treeD: "#26342E", hay: ["#B89A62", "#7A6340"] },
+    // Тёмные эльфы: чёрный базальт Наггарота, фиолетово-чёрные кровли, холодная сталь и колдовской фиолетовый свет
+    delf: { ...COMMON,
+      wall: ["#625C78", "#38324A"], white: ["#7C7694", "#4A4460"], wood: ["#463A48", "#261E2A"], lacquer: ["#6E2E9A", "#3F1660"], stone: ["#524E66", "#2C283C"], brick: ["#4A3C5E", "#2A2038"],
+      roof: ["#3A2C60", "#1C1634"], roof2: ["#2A4860", "#142636"], slate: ["#2E2A40", "#161422"], thatch: ["#4C4258", "#2A2434"], green: ["#2C5A64", "#16323A"],
+      dome: ["#3A2C60", "#1C1634"], dome2: ["#6E2E9A", "#3F1660"], rock: ["#6A667A", "#403C50"], slateHi: "#4A3E74", smoke: "rgba(110, 96, 140, 0.5)",
+      stoneT: "#666280", water: "#2E4C66", waterL: "#7FA4C0", woodPlank: ["#5A4658", "#30242E"], tent: ["#5C4C78", "#30263E"], tentR: ["#7A2A8E", "#431452"],
+      field1: "#7C7460", field2: "#4A4438", field3: "#56645C", tree: "#2C4844", treeD: "#162828", hay: ["#8A8072", "#544C42"],
+      magic: ["#8A4AD8", "#4A2488"] },
   };
   // фактура крыши: tile — черепица чешуёй, thatch — солома, shingle — деревянный лемех, ribs — желобчатая черепица
   const ROOF_TEX = {
     west: { roof: "tile", roof2: "shingle", slate: "slate", thatch: "thatch", green: "tile", dome: "slate", dome2: "slate", brick: "tile", stone: "slate", wood: "shingle" },
     slav: { roof: "shingle", roof2: "shingle", slate: "shingle", thatch: "thatch", green: "shingle", dome: "shingle", dome2: "shingle", brick: "tile", stone: "slate", wood: "shingle" },
     goth: { roof: "slate", roof2: "slate", slate: "slate", thatch: "thatch", green: "slate", dome: "slate", dome2: "slate", brick: "slate", stone: "slate", wood: "shingle" },
+    delf: { roof: "slate", roof2: "slate", slate: "slate", thatch: "shingle", green: "slate", dome: "slate", dome2: "slate", brick: "slate", stone: "slate", wood: "slate" },
     east: { roof: "ribs", roof2: "ribs", slate: "ribs", thatch: "thatch", green: "ribs", dome: "ribs", dome2: "ribs", brick: "ribs", stone: "slate", wood: "ribs" },
   };
 
@@ -103,11 +114,16 @@
   // a — длина вдоль оси «вправо-вверх», b — «влево-вверх», h — высота стен.
   function makeKit(g, style, color) {
     const S = PAL[style] || PAL[DEFAULT_STYLE], TX = ROOF_TEX[style] || ROOF_TEX[DEFAULT_STYLE];
-    const west = style === "west", slav = style === "slav", east = style === "east", goth = style === "goth";
-    const IRON = "#1E1A24", BLOOD = "#D23A3A";
+    const west = style === "west", slav = style === "slav", east = style === "east";
+    // delf (тёмные эльфы) строится на готическом наборе: goth здесь — «готическое семейство», delf — его отличия
+    const delf = style === "delf", goth = style === "goth" || delf;
+    const LINE = delf ? "#1B1524" : LINE_BASE;      // у тёмных эльфов обводка холодная, почти чёрная
+    if (delf) g.strokeStyle = LINE;
+    const IRON = delf ? "#17141F" : "#1E1A24", BLOOD = delf ? "#B66CFF" : "#D23A3A", BLOODD = delf ? "#7A3FC0" : "#A82E30";
+    const EMB = (al) => (delf ? "rgba(180, 110, 255, " : "rgba(255, 90, 70, ") + al + ")";
     const pair = (k) => (Array.isArray(k) ? k : S[k] || S.wall);
     const rand = rng(hashStr(style + "|" + (color || "") + "|" + g.canvas.width + "x" + g.canvas.height));
-    const texOf = (k) => (Array.isArray(k) ? (k === S.thatch ? "thatch" : "tile") : TX[k] || "tile");
+    const texOf = (k) => (Array.isArray(k) ? (k === S.thatch && !delf ? "thatch" : "tile") : TX[k] || "tile");
 
     // Рисованная линия: длинные рёбра чуть «гуляют», как у нарисованных от руки ассетов
     function wobble(pts, amt = 0.08) {
@@ -172,6 +188,7 @@
     // Фактура ската Q. kind: tile, shingle, slate, ribs, thatch. cols — [основной, тень].
     function roofTex(Q, kind, cols) {
       const P = mapOf(Q), [c0, c1] = cols, Lu = Math.max(arcLen(P, 0, true), arcLen(P, 1, true)), Lv = Math.max(arcLen(P, 0, false), arcLen(P, 1, false));
+      if (delf && kind === "thatch") kind = "shingle";      // соломы у тёмных эльфов нет: тёмный лемех
       g.save(); g.lineWidth = 0.07;
       if (kind === "thatch") {
         // солома: плотные короткие штрихи вдоль ската, тёмные и светлые
@@ -193,7 +210,7 @@
       } else {
         // чешуя: ряды со сдвигом, сверху вниз, цвета вперемешку (основной, тень, серый, светлый — как на ассете)
         const rect = kind !== "tile", rows = Math.max(2, Math.round(Lv / (rect ? 0.62 : 0.5))), per = Math.max(2, Math.round(Lu / (rect ? 0.62 : 0.42)));
-        const mix = kind === "slate" ? [c0, c0, c1, S.slateHi || "#7C858E", c0, c1] : kind === "shingle" ? [c0, c0, c1, c0, "#B89A70", c1] : [c1, c1, c0, c1, c0, c1, c1, "#8E8780", c0, c1, c1, "#D9CFC0", c1, c0];
+        const mix = kind === "slate" ? [c0, c0, c1, S.slateHi || "#7C858E", c0, c1] : kind === "shingle" ? [c0, c0, c1, c0, delf ? "#5E5470" : "#B89A70", c1] : [c1, c1, c0, c1, c0, c1, c1, "#8E8780", c0, c1, c1, "#D9CFC0", c1, c0];
         g.strokeStyle = LINE;
         for (let r = -1; r <= rows; r++) for (let i = -1; i <= per; i++) {
           const u = (i + (r % 2 ? 0.5 : 0) + 0.5) / per, v = (r + 0.5) / rows;
@@ -273,7 +290,7 @@
         for (const [Q, col] of [[[up(c.L, ph), up(c.F, ph), c.F, c.L], S.stone[1]], [[up(c.F, ph), up(c.R, ph), c.R, c.F], S.stone[0]]]) { path(Q); g.fillStyle = col; g.fill(); g.save(); path(Q); g.clip(); wallTex(Q, "stone", ph * 1.6); g.restore(); path(Q); g.save(); g.lineWidth = 0.18; g.stroke(); g.restore(); }
       }
       g.save(); g.lineWidth = 0.16; g.strokeStyle = "rgba(25, 12, 4, 0.45)"; g.beginPath();
-      if ((west || goth) && mat === "wall" && h >= 2.4 && a >= 3) {
+      if ((west || goth) && !delf && mat === "wall" && h >= 2.4 && a >= 3) {
         // фахверк: тёмные балки по светлой штукатурке
         g.strokeStyle = goth ? "#2E2630" : "#5A3E26"; g.lineWidth = 0.32;
         g.moveTo(c.F[0], c.F[1] - h * 0.5); g.lineTo(c.R[0], c.R[1] - h * 0.5);
@@ -281,6 +298,15 @@
         const p = mid(c.F, c.R, 0.33); g.moveTo(c.F[0], c.F[1] - h * 0.5); g.lineTo(p[0], p[1] - h);
       }
       g.stroke(); g.restore();
+      if (delf && mat !== "wood" && h >= 2.4 && a >= 2.5) {
+        // рёбра-контрфорсы по углам с когтем над карнизом, как на стенах Наггарота
+        for (const [q, sx] of [[c.L, -1], [c.F, 0], [c.R, 1]]) {
+          const w = 0.26, t = up(q, h);
+          g.beginPath(); g.moveTo(q[0] - w - 0.12, q[1]); g.lineTo(t[0] - w, t[1] + 0.3); g.quadraticCurveTo(t[0] + sx * 0.35, t[1] - 0.5, t[0] + sx * 0.55, t[1] - 1.25); g.quadraticCurveTo(t[0] + sx * 0.1 + w, t[1] - 0.2, t[0] + w, t[1] + 0.4); g.lineTo(q[0] + w + 0.12, q[1]); g.closePath();
+          g.fillStyle = "#262232"; g.fill(); g.save(); g.lineWidth = 0.14; g.stroke(); g.restore();
+          lin(q[0], q[1] - 0.2, t[0], t[1] + 0.5, "rgba(140, 120, 190, 0.5)", 0.07);
+        }
+      }
       if (slav && (mat === "wall" || mat === "wood")) {
         // торцы брёвен на переднем углу
         const n = Math.max(2, Math.round(h / 0.75));
@@ -305,13 +331,13 @@
     function gothWindows(x, y, a, h, n) {
       if (a < 2.6 || h < 1.6) return;
       n = n || (a >= 5 ? 3 : 2);
-      const door = h >= 2.6, hh = Math.min(1.1, h * 0.26), d0 = h * 0.42;
+      const door = h >= 2.6, hh = delf ? Math.min(1.5, h * 0.36) : Math.min(1.1, h * 0.26), d0 = delf ? h * 0.34 : h * 0.42;
       for (let k = 0; k < n; k++) {
         const t = (k + 0.7) / (n + 0.4);
         if (door && Math.abs(t - 0.5) < 0.6 / a + 0.02) continue;
         const c = [x + a * t, y - a * I * t - d0 - hh * 0.6];
-        glow(c[0], c[1], 1.25, "rgba(255, 90, 70, 0.5)");
-        const P = lancet(x, y, a, t, 0.27, d0, hh, 0.5, BLOOD);
+        glow(c[0], c[1], 1.25, EMB(0.5));
+        const P = lancet(x, y, a, t, delf ? 0.19 : 0.27, d0, hh, 0.5, BLOOD);
         g.save(); g.lineWidth = 0.07; g.strokeStyle = "#3A1A1E"; g.beginPath(); g.moveTo(...P(0, d0)); g.lineTo(...P(0, d0 + hh + 0.5)); g.stroke(); g.restore();
       }
       if (door) {
@@ -360,7 +386,7 @@
       if (goth && c.rose !== false && (c.mat === "stone" || c.mat === "white" || c.mat === "wall" || c.mat === "brick") && rh >= 3.4 && dist(Ft, Lt) >= 3.6) {
         // окно-роза на фронтоне
         const m0 = mid(Lt, Ft), rc = [m0[0] * 0.64 + rL[0] * 0.36, m0[1] * 0.64 + rL[1] * 0.36], rr = Math.min(0.75, dist(Ft, Lt) * 0.13);
-        glow(rc[0], rc[1], rr * 2.2, "rgba(255, 90, 70, 0.45)");
+        glow(rc[0], rc[1], rr * 2.2, EMB(0.45));
         g.beginPath(); g.ellipse(rc[0], rc[1], rr * 1.3, rr * 1.55, 0, 0, Math.PI * 2); g.fillStyle = "#35303C"; g.fill(); g.save(); g.lineWidth = 0.18; g.stroke(); g.restore();
         g.beginPath(); g.ellipse(rc[0], rc[1], rr * 0.95, rr * 1.15, 0, 0, Math.PI * 2); g.fillStyle = BLOOD; g.fill(); g.save(); g.lineWidth = 0.1; g.stroke();
         g.lineWidth = 0.07; g.strokeStyle = "#3A1A1E"; for (let k = 0; k < 4; k++) { const f = (k / 4) * Math.PI; g.beginPath(); g.moveTo(rc[0] + Math.cos(f) * rr * 0.95, rc[1] + Math.sin(f) * rr * 1.15); g.lineTo(rc[0] - Math.cos(f) * rr * 0.95, rc[1] - Math.sin(f) * rr * 1.15); g.stroke(); }
@@ -385,7 +411,11 @@
         for (let k = 0; k <= n; k++) {
           const p = mid(rLe, rRe, k / n), end = k === 0 || k === n, L = end ? 1.25 : 0.55;
           lin(p[0], p[1] - 0.15, p[0], p[1] - L, IRON, 0.16);
-          if (end) { g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(p[0], p[1] - L - 0.42); g.lineTo(p[0] - 0.17, p[1] - L + 0.05); g.lineTo(p[0] + 0.17, p[1] - L + 0.05); g.closePath(); g.fill(); g.restore(); }
+          if (end && delf) {
+            // коготь на торце конька, загнутый наружу
+            const sg = k === 0 ? -1 : 1, b0 = add(p, U, -sg * 0.3), b1 = add(p, U, sg * 0.3), cs = Math.min(1, Math.max(0.45, dist(rLe, rRe) / 10)), tip = up(add(p, U, sg * 1.25 * cs), 2.3 * cs), c0 = up(add(p, U, -sg * 0.5 * cs), 1.5 * cs), c1 = up(add(p, U, sg * 0.2 * cs), 0.9 * cs);
+            g.save(); g.beginPath(); g.moveTo(b0[0], b0[1] + 0.1); g.quadraticCurveTo(c0[0], c0[1], tip[0], tip[1]); g.quadraticCurveTo(c1[0], c1[1], b1[0], b1[1] + 0.1); g.closePath(); g.fillStyle = IRON; g.fill(); g.lineWidth = 0.08; g.strokeStyle = "rgba(150, 130, 200, 0.7)"; g.stroke(); g.restore();
+          } else if (end) { g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(p[0], p[1] - L - 0.42); g.lineTo(p[0] - 0.17, p[1] - L + 0.05); g.lineTo(p[0] + 0.17, p[1] - L + 0.05); g.closePath(); g.fill(); g.restore(); }
         }
       }
       if (slav) {
@@ -434,7 +464,7 @@
       if (o.win !== false) windows(x, y, a, h, o.win);
       if (goth && o.win !== false && o.side !== false && b >= 3.4 && h >= 2.4) {
         const n = b >= 5.5 ? 2 : 1, hh = Math.min(1.0, h * 0.24), d0 = h * 0.42;
-        for (let k = 0; k < n; k++) { const t = n === 1 ? 0.5 : 0.3 + k * 0.4; glow(c.L[0] + b * t, c.L[1] + b * I * t - d0 - hh * 0.6, 1.0, "rgba(255, 90, 70, 0.35)"); lancet(c.L[0], c.L[1], b, t, 0.25, d0, hh, 0.45, "#A82E30", -1); }
+        for (let k = 0; k < n; k++) { const t = n === 1 ? 0.5 : 0.3 + k * 0.4; glow(c.L[0] + b * t, c.L[1] + b * I * t - d0 - hh * 0.6, 1.0, "rgba(255, 90, 70, 0.35)"); lancet(c.L[0], c.L[1], b, t, 0.25, d0, hh, 0.45, BLOODD, -1); }
       }
       const rh = o.rh !== undefined ? o.rh : Math.max(1.4, Math.min(a, b) * 0.55);
       if (east && !o.gable) return hip(c, a, b, h, rh * 0.7, roofK, o.over);
@@ -457,6 +487,7 @@
           const t0 = i / n, t1 = (i + 1) / n;
           const q0 = up(mid(P0, P1, t0), h), q1 = up(mid(P0, P1, t1), h), m = up(mid(q0, q1), 0);
           if (slav) poly([q0, q1, up(q1, 1.9), up(m, 1.1), up(q0, 1.9)], col);   // «ласточкин хвост»
+          else if (delf) poly([q0, q1, up(q1, 1.0), up(m, 2.7), up(q0, 1.0)], col);
           else if (goth) poly([q0, q1, up(q1, 1.3), up(m, 2.1), up(q0, 1.3)], col);
           else poly([q0, q1, up(q1, 1.5), up(q0, 1.5)], col);
         }
@@ -499,8 +530,8 @@
       if (goth) {
         // стрельчатые бойницы с багровым светом и, у широкой стены, ворота с решёткой
         const gate = a >= 6 && h >= 5 && o.gate !== false, n = a >= 8 ? 3 : a >= 4 ? 2 : 1;
-        for (let k = 0; k < n; k++) { const t = (k + 0.5) / n; if (gate && Math.abs(t - 0.5) < 0.2) continue; glow(x + a * t, y - a * I * t - h * 0.66, 1.1, "rgba(255, 90, 70, 0.45)"); lancet(x, y, a, t, 0.22, h * 0.56, Math.min(1.4, h * 0.16), 0.45, BLOOD); }
-        for (let k = 0; k < (b >= 5 ? 2 : 1); k++) { const t = b >= 5 ? 0.3 + k * 0.4 : 0.5; lancet(c.L[0], c.L[1], b, t, 0.2, h * 0.56, Math.min(1.2, h * 0.14), 0.4, "#A82E30", -1); }
+        for (let k = 0; k < n; k++) { const t = (k + 0.5) / n; if (gate && Math.abs(t - 0.5) < 0.2) continue; glow(x + a * t, y - a * I * t - h * 0.66, 1.1, EMB(0.45)); lancet(x, y, a, t, 0.22, h * 0.56, Math.min(1.4, h * 0.16), 0.45, BLOOD); }
+        for (let k = 0; k < (b >= 5 ? 2 : 1); k++) { const t = b >= 5 ? 0.3 + k * 0.4 : 0.5; lancet(c.L[0], c.L[1], b, t, 0.2, h * 0.56, Math.min(1.2, h * 0.14), 0.4, BLOODD, -1); }
         if (gate) {
           const P = lancet(x, y, a, 0.5, 0.95, 0, Math.min(2.2, h * 0.3), 1.1, "#1A161E");
           g.save(); g.strokeStyle = "#5E5A62"; g.lineWidth = 0.1; const gh = Math.min(2.2, h * 0.3);
@@ -600,7 +631,14 @@
         g.restore();
       }
       body(); g.stroke();
-      if (o.win !== false && h > 5 && goth) { glow(x + r * 0.3, y - h * 0.6, 1.1, "rgba(255, 90, 70, 0.5)"); lancet(x + r * 0.3, y - h * 0.62 + (r * 0.3) * 0, 1, 0, 0.26, 0, 0.9, 0.45, BLOOD); }
+      if (delf && wk !== "wood" && h >= 5) {
+        // расширенное книзу основание и вертикальные рёбра
+        const sk = Math.min(h * 0.3, 3.2), e = r * 0.32;
+        g.beginPath(); g.moveTo(x - r, y - sk); g.quadraticCurveTo(x - r, y - sk * 0.3, x - r - e, y); g.ellipse(x, y, r + e, (r + e) * 0.5, 0, Math.PI, 0, true); g.quadraticCurveTo(x + r, y - sk * 0.3, x + r, y - sk); g.closePath();
+        g.fillStyle = grad(x - r - e, x + r + e, wd, wl); g.fill(); g.stroke();
+        for (const [dx, al] of [[-0.62, 0.55], [-0.1, 0.4], [0.5, 0.3]]) { const yy = Math.sqrt(Math.max(0, 1 - dx * dx)) * r * 0.5; lin(x + dx * r, y + yy - 0.2, x + dx * r, y - h + yy * 0.6, "rgba(20, 16, 30, " + al + ")", 0.16); }
+      }
+      if (o.win !== false && h > 5 && goth) { glow(x + r * 0.3, y - h * 0.6, 1.1, EMB(0.5)); lancet(x + r * 0.3, y - h * 0.62 + (r * 0.3) * 0, 1, 0, 0.26, 0, 0.9, 0.45, BLOOD); }
       else if (o.win !== false && h > 5) { g.save(); g.fillStyle = "rgba(30, 20, 10, 0.75)"; g.fillRect(x + r * 0.15, y - h * 0.62, 0.55, 1.1); g.restore(); }
       const top = o.top || "cone", rk = o.roof || (west ? "roof" : slav ? "green" : "roof"), [rf, rd] = pair(rk), rkind = texOf(rk);
       const ty = y - h, ch = o.coneH !== undefined ? o.coneH : r * 2.2;
@@ -632,8 +670,19 @@
         else finial(x, ty - H + 0.2, 1.4);
         return ty - H - (top !== "flat" ? r * 0.8 : 1.4);
       }
-      const H = (top === "spire" ? ch * 1.7 : ch) * (goth && rkind !== "thatch" ? 1.3 : 1);
-      cone(x, ty, r * (top === "spire" ? 1.08 : 1.25), H, rf, rd, rkind);
+      const H = (top === "spire" ? ch * 1.7 : ch) * (goth && rkind !== "thatch" ? (delf ? 1.5 : 1.3) : 1);
+      const claw = (sg, k, hk) => { g.beginPath(); g.moveTo(x + sg * r * (k + 0.28), ty + 0.3); g.quadraticCurveTo(x + sg * r * (k + 1.05), ty - hk * 0.45, x + sg * r * (k + 0.2), ty - hk); g.quadraticCurveTo(x + sg * r * (k + 0.5), ty - hk * 0.4, x + sg * r * (k - 0.22), ty + 0.2); g.closePath(); g.fillStyle = "#211D2C"; g.fill(); g.save(); g.lineWidth = 0.13; g.stroke(); g.restore(); lin(x + sg * r * (k + 0.62), ty - hk * 0.42, x + sg * r * (k + 0.24), ty - hk * 0.94, "rgba(150, 130, 200, 0.75)", 0.07); };
+      const crown = delf && rkind !== "thatch" && h >= 5, hk = Math.min(H * 0.55, r * 2.1 + 0.8);
+      if (crown) { claw(-1, 0.25, hk * 0.8); claw(1, 0.25, hk * 0.8); }
+      cone(x, ty, r * (top === "spire" ? 1.08 : 1.25) * (delf ? 0.86 : 1), H, rf, rd, rkind);
+      if (crown) {
+        // корона из когтей вокруг шпиля и колдовской огонь на острие
+        claw(-1, 0.85, hk); claw(1, 0.85, hk);
+        lin(x, ty - H + 0.1, x, ty - H - 1.1, IRON, 0.17);
+        for (const sg of [-1, 1]) { g.save(); g.strokeStyle = IRON; g.lineWidth = 0.15; g.beginPath(); g.moveTo(x, ty - H - 0.1); g.quadraticCurveTo(x + sg * 0.5, ty - H - 0.2, x + sg * 0.42, ty - H - 0.95); g.stroke(); g.restore(); }
+        if (top === "spire" || h >= 9) { glow(x, ty - H - 1.2, 1.5, "rgba(190, 120, 255, 0.85)"); g.save(); g.fillStyle = "#E8D0FF"; g.beginPath(); g.arc(x, ty - H - 1.25, 0.2, 0, Math.PI * 2); g.fill(); g.restore(); }
+        return ty - H - 1.4;
+      }
       if (goth && rkind !== "thatch") { lin(x, ty - H + 0.1, x, ty - H - 1.0, IRON, 0.17); g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, ty - H - 1.4); g.lineTo(x - 0.17, ty - H - 0.95); g.lineTo(x + 0.17, ty - H - 0.95); g.closePath(); g.fill(); g.restore(); if (top === "spire" && h >= 9) { bat(x + r + 2.6, ty - H * 0.55, 0.6); bat(x - r - 2.2, ty - H * 0.9, 0.45); } return ty - H - 1.4; }
       return ty - H;
     }
@@ -686,6 +735,11 @@
     /* ---------------- мелкие детали ---------------- */
     function tree(x, y, s, kind) {
       const v = kind !== undefined ? kind : Math.abs(Math.round(x * 7 + y * 3)) % 2;
+      if (delf && v !== 0) {      // чёрная ель Наггарота: ярусы зубчатых лап
+        lin(x, y, x, y - s * 0.3, LINE, 0.8); lin(x, y, x, y - s * 0.3, "#3A3040", 0.45);
+        for (let k = 0; k < 3; k++) { const yy = y - s * (0.22 + k * 0.38), w = s * (0.5 - k * 0.11); poly([[x, yy - s * 0.62], [x + w * 0.45, yy - s * 0.2], [x + w * 0.3, yy - s * 0.2], [x + w, yy + s * 0.08], [x + w * 0.35, yy], [x, yy + s * 0.1], [x - w * 0.35, yy], [x - w, yy + s * 0.08], [x - w * 0.3, yy - s * 0.2], [x - w * 0.45, yy - s * 0.2]], k % 2 ? S.tree : S.treeD); }
+        return;
+      }
       if (goth && v === 0) {      // сухое дерево
         const br = (x0, y0, ang, len, w, d) => {
           const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len;
@@ -798,7 +852,7 @@
     function gothTint(col) {
       const m = /^#([0-9a-f]{6})$/i.exec(col || ""); if (!m) return col;
       const n = parseInt(m[1], 16), mix = (v, t) => Math.round(v * 0.68 + t * 0.32);
-      return "rgb(" + mix(n >> 16, 0x2A) + "," + mix((n >> 8) & 255, 0x12) + "," + mix(n & 255, 0x24) + ")";
+      return delf ? "rgb(" + mix(n >> 16, 0x3A) + "," + mix((n >> 8) & 255, 0x16) + "," + mix(n & 255, 0x5A) + ")" : "rgb(" + mix(n >> 16, 0x2A) + "," + mix((n >> 8) & 255, 0x12) + "," + mix(n & 255, 0x24) + ")";
     }
     function bat(x, y, s) {
       g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, y);
@@ -814,6 +868,18 @@
       lin(x, y, x, y - hh, S.woodPlank[1], 0.55);
       col = col || color;
       if (east) { lin(x - 0.2, y - hh + 0.3, x + 2.6, y - hh + 0.3, S.woodPlank[1], 0.4); poly([[x + 0.1, y - hh + 0.4], [x + 2.4, y - hh + 0.4], [x + 2.4, y - hh + 5], [x + 1.25, y - hh + 4.2], [x + 0.1, y - hh + 5]], col); return; }
+      if (delf) {
+        // знамя друкаев: длинное полотнище на перекладине, низ зубцами, руна и клинок-навершие
+        col = gothTint(col); lin(x, y, x, y - hh - 0.4, IRON, 0.34);
+        const t = y - hh;
+        g.save(); g.fillStyle = IRON; g.beginPath(); g.moveTo(x, t - 1.7); g.quadraticCurveTo(x + 0.55, t - 1.0, x + 0.2, t - 0.35); g.lineTo(x - 0.2, t - 0.35); g.quadraticCurveTo(x - 0.55, t - 1.0, x, t - 1.7); g.fill(); g.restore();
+        lin(x - 0.5, t + 0.1, x + 2.9, t + 0.1, IRON, 0.26);
+        const F = [[x + 0.25, t + 0.2], [x + 2.65, t + 0.2], [x + 2.65, t + 4.0], [x + 2.05, t + 3.3], [x + 1.45, t + 4.9], [x + 0.85, t + 3.3], [x + 0.25, t + 4.0]];
+        poly(F, col);
+        g.save(); path(F); g.clip(); g.fillStyle = "rgba(14, 8, 22, 0.35)"; g.fillRect(x + 0.25, t + 0.2, 0.42, 5); g.fillRect(x + 2.23, t + 0.2, 0.42, 5);
+        g.strokeStyle = "rgba(232, 216, 255, 0.9)"; g.lineWidth = 0.15; g.beginPath(); g.moveTo(x + 1.45, t + 0.8); g.lineTo(x + 1.45, t + 2.9); g.moveTo(x + 0.95, t + 1.3); g.lineTo(x + 1.45, t + 1.9); g.lineTo(x + 1.95, t + 1.3); g.moveTo(x + 1.05, t + 2.5); g.lineTo(x + 1.85, t + 2.5); g.stroke(); g.restore();
+        return;
+      }
       if (goth) {
         // узкий стяг с раздвоенным хвостом на кованом древке с пикой
         col = gothTint(col); lin(x, y, x, y - hh - 0.5, IRON, 0.34);
@@ -841,7 +907,7 @@
         poly([[x - 3 * s, y - 8.4 * s], [x + 3 * s, y - 8.4 * s], [x + 3.4 * s, y - 2 * s], [x - 3.4 * s, y - 2 * s]], "#E8DCC0");
         g.save(); g.fillStyle = "#B8402E"; for (let k = 0; k < 3; k++) g.fillRect(x - 2.9 * s + k * 2.2 * s, y - 8.3 * s, 1 * s, 6.2 * s); g.restore();
       } else {
-        poly([[x - 3 * s, y - 8.4 * s], [x + 3 * s, y - 8.4 * s], [x + 3.2 * s, y - 2.6 * s], [x - 3.2 * s, y - 2.6 * s]], "#E2D6B8");
+        poly([[x - 3 * s, y - 8.4 * s], [x + 3 * s, y - 8.4 * s], [x + 3.2 * s, y - 2.6 * s], [x - 3.2 * s, y - 2.6 * s]], delf ? "#4A2E6E" : "#E2D6B8");
         lin(x - 3.2 * s, y - 8.6 * s, x + 3.2 * s, y - 8.6 * s, LINE, 0.4);
       }
     }
@@ -858,6 +924,18 @@
         const x = x0 + ((x1 - x0) * k) / n, y = y0 + ((y1 - y0) * k) / n;
         poly([[x - 0.45, y], [x - 0.45, y - h], [x, y - h - 0.8], [x + 0.45, y - h], [x + 0.45, y]], k % 2 ? S.wood[0] : S.wood[1]);
       }
+    }
+    // Ездовой ящер тёмных эльфов: двуногий, с тяжёлым хвостом и зубастой мордой
+    function coldOne(x, y, col, s) {
+      const leg = (dx) => { lin(x + dx * s, y, x + (dx - 0.25) * s, y - 0.75 * s, LINE, 0.62 * s); lin(x + dx * s, y, x + (dx - 0.25) * s, y - 0.75 * s, col, 0.36 * s); lin(x + (dx - 0.25) * s, y - 0.75 * s, x + (dx + 0.15) * s, y - 1.45 * s, LINE, 0.72 * s); lin(x + (dx - 0.25) * s, y - 0.75 * s, x + (dx + 0.15) * s, y - 1.45 * s, col, 0.46 * s); lin(x + dx * s, y, x + (dx + 0.45) * s, y, LINE, 0.3 * s); };
+      leg(-0.15);
+      g.beginPath(); g.moveTo(x - 2.9 * s, y - 0.9 * s); g.quadraticCurveTo(x - 1.6 * s, y - 2.3 * s, x - 0.2 * s, y - 2.45 * s); g.quadraticCurveTo(x + 0.9 * s, y - 2.6 * s, x + 1.25 * s, y - 3.2 * s);
+      g.lineTo(x + 2.45 * s, y - 3.05 * s); g.lineTo(x + 2.5 * s, y - 2.72 * s); g.lineTo(x + 1.75 * s, y - 2.55 * s); g.lineTo(x + 2.3 * s, y - 2.42 * s); g.lineTo(x + 1.45 * s, y - 2.25 * s);
+      g.quadraticCurveTo(x + 1.2 * s, y - 1.3 * s, x + 0.2 * s, y - 1.2 * s); g.quadraticCurveTo(x - 1.4 * s, y - 1.15 * s, x - 2.9 * s, y - 0.9 * s); g.closePath(); g.fillStyle = col; g.fill(); g.stroke();
+      g.save(); g.fillStyle = IRON; for (const [dx, dy] of [[-1.5, -2.02], [-0.9, -2.3], [-0.3, -2.44], [0.3, -2.52]]) { g.beginPath(); g.moveTo(x + (dx - 0.16) * s, y + dy * s); g.lineTo(x + (dx - 0.1) * s, y + (dy - 0.42) * s); g.lineTo(x + (dx + 0.18) * s, y + (dy - 0.04) * s); g.closePath(); g.fill(); }
+      g.fillStyle = BLOOD; g.beginPath(); g.arc(x + 1.6 * s, y - 2.95 * s, 0.09 * s, 0, Math.PI * 2); g.fill(); g.restore();
+      leg(0.55);
+      lin(x + 1.0 * s, y - 1.9 * s, x + 1.45 * s, y - 1.55 * s, LINE, 0.28 * s);
     }
     // Зверь для готического стиля: четыре ноги, шея, голова, хвост. kind: sheep, cow, horse, beast
     function beast(x, y, col, s, kind) {
@@ -890,7 +968,7 @@
     }
     const sheep = (x, y) => animal(x, y, "#EEE8DA", 0.9);
     const cow = (x, y) => { if (goth) return beast(x, y, "#3E3036", 1.2, "cow"); animal(x, y, "#8A5A3A", 1.2); g.save(); g.fillStyle = "#EEE8DA"; g.beginPath(); g.arc(x - 0.3, y - 1.5, 0.35, 0, Math.PI * 2); g.fill(); g.restore(); };
-    const horse = (x, y, col = "#6A4428") => { if (goth) return beast(x, y, col === "#6A4428" ? "#2A2228" : col === "#9A7A54" ? "#5A5058" : "#1E1A20", 1.15, "horse"); animal(x, y, col, 1.15); lin(x + 1.1, y - 1.7, x + 1.5, y - 2.6, LINE, 0.45); };
+    const horse = (x, y, col = "#6A4428") => { if (delf) return coldOne(x, y, col === "#9A7A54" ? "#4E6A66" : "#33504E", 1.15); if (goth) return beast(x, y, col === "#6A4428" ? "#2A2228" : col === "#9A7A54" ? "#5A5058" : "#1E1A20", 1.15, "horse"); animal(x, y, col, 1.15); lin(x + 1.1, y - 1.7, x + 1.5, y - 2.6, LINE, 0.45); };
     const chicken = (x, y) => { if (goth) { lin(x - 0.1, y, x - 0.1, y - 0.5, LINE, 0.14); lin(x + 0.25, y, x + 0.25, y - 0.5, LINE, 0.14); g.beginPath(); g.moveTo(x - 0.85, y - 1.15); g.quadraticCurveTo(x - 0.7, y - 0.3, x + 0.1, y - 0.35); g.quadraticCurveTo(x + 0.75, y - 0.4, x + 0.6, y - 1.25); g.quadraticCurveTo(x + 0.1, y - 0.95, x - 0.85, y - 1.15); g.closePath(); g.fillStyle = "#2A2228"; g.fill(); g.save(); g.lineWidth = 0.14; g.stroke(); g.restore(); g.beginPath(); g.arc(x + 0.62, y - 1.3, 0.27, 0, Math.PI * 2); g.fill(); g.save(); g.fillStyle = BLOOD; g.fillRect(x + 0.5, y - 1.72, 0.26, 0.2); g.fillStyle = "#C9A646"; g.beginPath(); g.moveTo(x + 0.85, y - 1.35); g.lineTo(x + 1.15, y - 1.25); g.lineTo(x + 0.85, y - 1.18); g.fill(); g.restore(); return; } g.beginPath(); g.ellipse(x, y - 0.5, 0.55, 0.42, 0, 0, Math.PI * 2); g.fillStyle = "#F2EAD8"; g.fill(); g.stroke(); g.save(); g.fillStyle = "#C83A2A"; g.fillRect(x + 0.3, y - 1.05, 0.3, 0.3); g.restore(); };
     function hive(x, y) {
       if (west) { g.beginPath(); g.moveTo(x - 1, y); g.quadraticCurveTo(x - 1.1, y - 2.2, x, y - 2.3); g.quadraticCurveTo(x + 1.1, y - 2.2, x + 1, y); g.closePath(); g.fillStyle = S.thatch[0]; g.fill(); g.stroke(); lin(x - 0.9, y - 1, x + 0.9, y - 1, S.thatch[1], 0.25); }
@@ -1009,7 +1087,7 @@
       else { const m = up(mid(Ft, Rt), 0.8 + a * 0.35); poly([up(Ft, 0.8), up(Rt, 0.8), m], S.green[0]); }
     }
 
-    return { g, LINE, IRON, BLOOD, bat, lancet, gothTint, goth, beast, hip, gable, wobble, unit, add, qp, dist, S, style, west, slav, east, color, rand, poly, path, lin, rocks, hay, wagon, blob, roofTex, wallTex, grad, front, corners, up, mid, groundShadow, walls, windows, hall, block, keep, merlons, tower, temple, pagoda,
+    return { g, LINE, IRON, BLOOD, BLOODD, EMB, delf, coldOne, bat, lancet, gothTint, goth, beast, hip, gable, wobble, unit, add, qp, dist, S, style, west, slav, east, color, rand, poly, path, lin, rocks, hay, wagon, blob, roofTex, wallTex, grad, front, corners, up, mid, groundShadow, walls, windows, hall, block, keep, merlons, tower, temple, pagoda,
       cone, hat, onion, dome, cross, finial, tree, field, smoke, chimney, roofChimney, vortex, tent, flag, boat, pier, water, fence, palisade, animal, sheep, cow, horse, chicken, hive,
       barrel, crate, sack, logs, coins, wheelDisc, glow, crystal, menhir, fire, sign, arch, column, portico };
   }
@@ -1786,9 +1864,10 @@
     slav: { walls: ["wall", "wood", "wall", "wood"], roofs: ["roof", "roof", "roof2", "thatch"] },
     east: { walls: ["wall", "white", "wall", "wood"], roofs: ["roof2", "roof", "thatch", "roof2"] },
     goth: { walls: ["wall", "stone", "wall", "wood"], roofs: ["slate", "roof", "roof2", "slate"] },
+    delf: { walls: ["stone", "wall", "stone", "wall"], roofs: ["slate", "roof", "roof2", "roof"] },
   };
   // реквизит вампирского стиля (надгробия, фонари, ограды) лежит в buildings-goth.js
-  const gothProps = (style) => (style === "goth" && window.VPIGoth ? window.VPIGoth.V : null);
+  const gothProps = (style) => ((style === "goth" || style === "delf") && window.VPIGoth ? window.VPIGoth.V : null);
   /* Аванпост колонистов: частокол по кругу, внутри палатки, пара срубов и сторожевая вышка,
    * у столицы на вышке флаг государства. */
   function outpostSprite(capital, color, variant, style) {
@@ -1822,7 +1901,7 @@
           for (const [dx, dy] of [[-1.3, -0.5], [1.3, -0.5], [-1.3, 0.5], [1.3, 0.5]]) K.lin(x + dx, y + dy, x + dx * 0.8, y + dy - h, S.woodPlank[1], 0.55);
           K.lin(x - 1.2, y - h * 0.45, x + 1.2, y - h * 0.45, S.woodPlank[0], 0.4);
           K.poly([[x - 2, y - h], [x + 2, y - h], [x + 2, y - h - 1.6], [x - 2, y - h - 1.6]], S.woodPlank[0]);
-          K.poly([[x - 2.4, y - h - 1.6], [x, y - h - 4.4], [x + 2.4, y - h - 1.6]], style === "east" ? S.roof[0] : style === "goth" ? S.slate[1] : S.thatch[0]);
+          K.poly([[x - 2.4, y - h - 1.6], [x, y - h - 4.4], [x + 2.4, y - h - 1.6]], style === "east" ? S.roof[0] : style === "goth" || style === "delf" ? S.slate[1] : S.thatch[0]);
           if (capital) K.flag(x + 0.2, y - h - 4, 4.2, color);
         } },
       ];
@@ -1957,7 +2036,7 @@
       K.hay(cx + (variant ? -6 : 6), gy + 3.2, 1.4, 0.9, 0.8); K.rocks(cx + (variant ? 6 : -6.5), gy + 2.5, 2, 0.8);
       spots.sort((a, b) => a[1] - b[1]).forEach(([dx, dy]) => {
         const a = 2.6 + rand() * 1, b = 2 + rand() * 0.6;
-        K.hall(cx + dx, gy + dy, a, b, 1.9 + rand() * 0.6, { wall: rand() < 0.5 ? "wood" : "wall", roof: style === "east" ? "roof" : style === "goth" && rand() < 0.45 ? "slate" : "thatch", rh: 1.6 + rand() * 0.6, over: 0.5 });
+        K.hall(cx + dx, gy + dy, a, b, 1.9 + rand() * 0.6, { wall: rand() < 0.5 ? "wood" : "wall", roof: style === "east" ? "roof" : style === "delf" ? (rand() < 0.5 ? "slate" : "roof") : style === "goth" && rand() < 0.45 ? "slate" : "thatch", rh: 1.6 + rand() * 0.6, over: 0.5 });
       });
       const GV = gothProps(style);
       if (GV) {
