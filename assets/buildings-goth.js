@@ -6,7 +6,8 @@
   "use strict";
   const I = 0.5;
   const R = {};
-  const EMBER = "rgba(255, 90, 70, 0.5)";
+  // реквизит тёмных эльфов (buildings-delf.js) подменяет одноимённые детали, когда набор рисует стиль delf
+  const DV = (K, name) => (K.delf && window.VPIDelf && window.VPIDelf.V[name]) || null;
 
   /* ---------------- помощники ---------------- */
 
@@ -30,6 +31,7 @@
   }
   // фонарь на кованом столбе с багровым огнём
   function lantern(K, x, y, h = 4) {
+    { const d = DV(K, "lantern"); if (d) return d(K, x, y, h); }
     const g = K.g;
     K.lin(x, y, x, y - h, K.IRON, 0.3);
     g.save(); g.strokeStyle = K.IRON; g.lineWidth = 0.2; g.beginPath(); g.moveTo(x, y - h); g.quadraticCurveTo(x + 0.2, y - h - 0.7, x + 0.95, y - h - 0.45); g.stroke(); g.restore();
@@ -42,6 +44,7 @@
   }
   // надгробие: 0 — скруглённая плита, 1 — обелиск, 2 — покосившаяся плита
   function grave(K, x, y, s = 1, kind = 0) {
+    { const d = DV(K, "grave"); if (d) return d(K, x, y, s, kind); }
     const g = K.g, S = K.S;
     g.save(); g.fillStyle = "rgba(70, 56, 44, 0.45)"; g.beginPath(); g.ellipse(x + 0.2 * s, y + 0.1 * s, 1.0 * s, 0.36 * s, 0, 0, Math.PI * 2); g.fill(); g.restore();
     g.save(); g.translate(x, y); if (kind === 2) g.rotate(-0.16);
@@ -55,6 +58,7 @@
     g.restore();
   }
   function coffin(K, x, y, s = 1) {
+    { const d = DV(K, "coffin"); if (d) return d(K, x, y, s); }
     const g = K.g;
     const pts = [[0, 0], [-0.55, -0.35], [-0.75, -2.4], [-0.4, -3.1], [0.4, -3.1], [0.75, -2.4], [0.55, -0.35]].map(([a, b]) => [x + a * s, y + b * s]);
     sh(g, pts, "#4A3428", 0.22);
@@ -64,6 +68,7 @@
   }
   // жаровня на треноге
   function brazier(K, x, y, s = 1) {
+    { const d = DV(K, "brazier"); if (d) return d(K, x, y, s); }
     const g = K.g;
     for (const d of [-0.6, 0, 0.6]) K.lin(x + d * s, y, x + d * 0.35 * s, y - 1.5 * s, K.IRON, 0.18);
     K.fire(x, y - 1.7 * s, 0.6 * s);
@@ -71,12 +76,14 @@
   }
   // свеча в подсвечнике
   function candle(K, x, y, h = 2.4) {
+    { const d = DV(K, "candle"); if (d) return d(K, x, y, h); }
     K.lin(x, y, x, y - h * 0.55, K.IRON, 0.22); K.lin(x - 0.4, y, x + 0.4, y, K.IRON, 0.24);
     K.lin(x, y - h * 0.55, x, y - h, K.LINE, 0.5); K.lin(x, y - h * 0.55, x, y - h, "#E6DCC4", 0.3);
     K.fire(x, y - h, 0.32);
   }
   // знамя: полотнище на перекладине, с вырезом и летучей мышью
   function banner(K, x, y, h, col = "#7A1E26") {
+    { const d = DV(K, "banner"); if (d) return d(K, x, y, h, col); }
     const g = K.g;
     K.lin(x, y, x, y - h, K.IRON, 0.32); K.lin(x - 0.2, y - h + 0.3, x + 2.3, y - h + 0.3, K.IRON, 0.24);
     spike(K, x, y - h, 0.5, 0.2);
@@ -87,6 +94,7 @@
   }
   // каменная горгулья на постаменте
   function gargoyle(K, x, y, s = 1) {
+    { const d = DV(K, "gargoyle"); if (d) return d(K, x, y, s); }
     const g = K.g, S = K.S;
     const c = K.corners(x, y, 1.5 * s, 1.5 * s), ph = 1.3 * s;
     sh(g, [c.L, c.F, K.up(c.F, ph), K.up(c.L, ph)], S.stone[1], 0.18); sh(g, [c.F, c.R, K.up(c.R, ph), K.up(c.F, ph)], S.stone[0], 0.18);
@@ -156,6 +164,7 @@
   }
   // торговый прилавок под полосатым навесом
   function stall(K, x, y, col = "#7A1E26", goods = 0) {
+    if (K.delf && col === "#7A1E26") col = "#6E2E9A";
     const g = K.g, c = K.corners(x, y, 3.2, 1.9), ch = 1.2, ph = 3.2;
     for (const p of [c.L, c.B]) K.lin(p[0], p[1], p[0], p[1] - ph - 0.5, K.S.woodPlank[1], 0.3);
     sh(g, [c.L, c.F, K.up(c.F, ch), K.up(c.L, ch)], K.S.woodPlank[1], 0.18); sh(g, [c.F, c.R, K.up(c.R, ch), K.up(c.F, ch)], K.S.woodPlank[0], 0.18);
@@ -201,13 +210,13 @@
     const g = K.g, dm = K.qp([r.rL, r.rR, K.up(c.R, h), K.up(c.F, h)], t, v);
     sh(g, [[dm[0] - 0.7, dm[1] + 0.6], [dm[0] + 0.7, dm[1] - 0.1], [dm[0] + 0.7, dm[1] - 1.1], [dm[0] - 0.7, dm[1] - 0.4]], K.S.stone[0], 0.18);
     sh(g, [[dm[0] - 0.95, dm[1] - 0.3], [dm[0] - 0.05, dm[1] - 2.2], [dm[0] + 0.95, dm[1] - 1.25]], K.S.slate[1], 0.2);
-    K.glow(dm[0], dm[1] - 0.3, 0.9, EMBER);
+    K.glow(dm[0], dm[1] - 0.3, 0.9, K.EMB(0.5));
     sh(g, [[dm[0] - 0.3, dm[1] + 0.25], [dm[0] + 0.3, dm[1] - 0.05], [dm[0] + 0.3, dm[1] - 0.75], [dm[0] - 0.3, dm[1] - 0.45]], K.BLOOD, 0.12);
   }
   // башенка со шпилем и окном
   function turret(K, x, y, rad, h, coneH, roof = "slate") {
     const top = K.tower(x, y, rad, h, { wall: "stone", top: "cone", roof, coneH: coneH || rad * 3, win: false });
-    K.glow(x + rad * 0.2, y - h + 1.6, 1.0, EMBER);
+    K.glow(x + rad * 0.2, y - h + 1.6, 1.0, K.EMB(0.5));
     K.lancet(x + rad * 0.2, y, 1, 0, Math.min(0.24, rad * 0.2), h - 2.2, 0.8, 0.42, K.BLOOD);
     return top;
   }
@@ -448,7 +457,7 @@
     const r = K.hall(hx, hy, A, B, Hh, { wall: "stone", roof: "slate", rh: 3.6, win: false, side: false });
     const G = geo(K, hx, hy, A, B);
     for (const t of [0.22, 0.82]) {
-      K.glow(...G.W(t, 2.6), 1.5, EMBER);
+      K.glow(...G.W(t, 2.6), 1.5, K.EMB(0.5));
       const P = K.lancet(G.x, G.y, A, t, 0.38, 1.8, 1.3, 0.75, red);
       g.save(); g.lineWidth = 0.08; g.strokeStyle = "#3A1A1E"; g.beginPath(); g.moveTo(...P(0, 1.8)); g.lineTo(...P(0, 3.8)); g.moveTo(...P(-0.38, 2.55)); g.lineTo(...P(0.38, 2.55)); g.stroke(); g.restore();
     }
@@ -589,8 +598,8 @@
   R["Святилище"] = (K, x, y) => {
     K.tree(x - 9, y - 2, 4.4, 0); K.tree(x + 9, y - 3, 3.6, 1); K.tree(x - 4, y - 7, 3.2, 1); K.tree(x + 4.6, y - 7.5, 4, 0);
     K.groundShadow(x, y, 8);
-    K.glow(x, y - 8, 9, "rgba(255, 80, 70, 0.4)");
-    for (let k = -2; k <= 2; k++) K.lin(x, y - 9, x + k * 3, y - 22, "rgba(255, 90, 80, 0.32)", 0.8);
+    K.glow(x, y - 8, 9, K.EMB(0.4));
+    for (let k = -2; k <= 2; k++) K.lin(x, y - 9, x + k * 3, y - 22, K.EMB(0.32), 0.8);
     K.temple(x, y + 1, 1, { gold: true });
     statue(K, x - 7.4, y + 4.6, 0.9); statue(K, x + 7.4, y + 3.4, 0.9);
     brazier(K, x + 2.6, y + 7, 0.9);

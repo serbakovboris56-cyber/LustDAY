@@ -438,7 +438,7 @@
 
   /**
    * data — properties.provinces государства ({towns, links}); regions — [{name, type, population, buildings}]
-   * из публичных цифр, style — стиль построек государства (west, slav, east, goth). Возвращает готовые к рисованию дороги и значки или null.
+   * из публичных цифр, style — стиль построек государства (west, slav, east, goth, delf). Возвращает готовые к рисованию дороги и значки или null.
    */
   function prepare(data, regions, color, style) {
     const VB = window.VPIBuildings;
