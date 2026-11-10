@@ -5,6 +5,7 @@
  */
 
 const TOKEN_DAYS = 30;   // сессия продлевается при каждом открытии сайта (action session)
+const MAX_SHEET_READS = 40;   // таблиц за один вызов: каждое чтение = подзапрос, лимит Cloudflare на бесплатном плане 50
 const SNAPSHOT_MAX_AGE = 30 * 60 * 1000;   // старше — пересобрать прямо в запросе
 const COLORS = ["#C8463A", "#3D7FCF", "#3E9E62", "#C9A646", "#9277C9", "#4FA3A0", "#B8734A", "#D46A9F", "#7E8C99", "#8FB34A", "#E08A3C", "#5B6FD6", "#A64A6E", "#3FB6C9", "#B0A060"];
 const ESTATES = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
@@ -454,7 +455,7 @@ async function collectState(env, r, cfg, prev) {
   try {
     const d = parseLedger(await readSheetValues(env, r.sheet_id), cfg.startYear);
     if (!base.name) base.name = (d.sheetName && !d.sheetName.startsWith("[") ? d.sheetName : "") || r.id;
-    return { ...base, public: d.public, ledger: d.ledger };
+    return { ...base, public: d.public, ledger: d.ledger, readAt: new Date().toISOString() };
   } catch (e) {
     if (prev && prev.ledger && !prev.error) {
       return { ...base, name: base.name || prev.name, public: prev.public || {}, ledger: prev.ledger, readError: e.message, readErrorAt: new Date().toISOString() };
@@ -496,9 +497,17 @@ async function refreshSnapshot(env, { force = false } = {}) {
   try {
     const [regs, cfg, prev] = await Promise.all([registry(env), settings(env), previousStates(env)]);
     const active = regs.filter((r) => r.active);
-    const states = await Promise.all(active.map((r) => collectState(env, r, cfg, prev.get(r.id))));
+    // Один токен Google на весь сбор. Без этого параллельные чтения при пустом кэше просили бы каждый свой токен:
+    // 25 таблиц = 25 токенов + 25 чтений, и Cloudflare обрывал вызов на лимите подзапросов (50 на бесплатном плане).
+    await googleToken(env).catch(() => null);
+    // За один вызов читаем не больше MAX_SHEET_READS таблиц, сначала самые давно прочитанные; остальные
+    // оставляют прежние цифры и дочитываются следующим сбором (cron раз в 10 минут).
+    const readAt = (r) => { const p = prev.get(r.id); return (p && (p.readAt || p.readErrorAt)) || ""; };
+    const queue = active.filter((r) => r.sheet_id).sort((a, b) => readAt(a).localeCompare(readAt(b)));
+    const later = new Set(queue.slice(MAX_SHEET_READS).map((r) => r.id));
+    const states = (await Promise.all(active.map((r) => (later.has(r.id) ? prev.get(r.id) : collectState(env, r, cfg, prev.get(r.id)))))).filter(Boolean);
     const now = new Date().toISOString();
-    const stmts = states.map((s) => snapshotUpsert(env, s, now));
+    const stmts = states.filter((s) => !later.has(s.id)).map((s) => snapshotUpsert(env, s, now));
     const ids = active.map((r) => r.id);
     stmts.push(ids.length
       ? env.DB.prepare(`DELETE FROM snapshot_states WHERE state_id NOT IN (${ids.map(() => "?").join(",")})`).bind(...ids)
