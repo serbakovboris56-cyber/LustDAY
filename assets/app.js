@@ -186,6 +186,12 @@
       const s = state.byId.get(id);
       return s ? { color: s.color, selected: state.selected === id, regions: (s.public && s.public.provinces) || null, style: s.style } : null;
     });
+    // города, деревни и постройки, которые стоят на карте сами по себе (без хозяина или захваченные)
+    vector.setObjects((bordersGeo && bordersGeo.objects) || [], objOwner);
+  }
+  function objOwner(id) {
+    const s = state.byId.get(id);
+    return s ? { color: s.color, name: s.name, style: s.style } : null;
   }
   function addBorders(geo) {
     bordersGeo = geo || bordersGeo;
@@ -248,7 +254,8 @@
       if (t.building) townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${esc(t.town)}</div>`);
       else {
         const b = t.buildings.length ? `<div class="town-tip__b">${t.buildings.map(esc).join(", ")}</div>` : "";
-        townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${t.capital ? "Столица, " : ""}${esc(t.tier.toLowerCase())}${t.pop ? ` · ${fmt(t.pop)} жителей` : ""}</div>${b}`);
+        const own = t.owner ? `<div>${t.owner === "Без хозяина" ? "Без хозяина" : "Владеет: " + esc(t.owner)}${t.from && t.from !== t.owner ? ` · основан: ${esc(t.from)}` : ""}</div>` : "";
+        townTip.setLatLng(tipEvent.latlng).setContent(`<b>${esc(t.name)}</b><div>${t.capital ? "Столица, " : ""}${esc(t.tier.toLowerCase())}${t.pop ? ` · ${fmt(t.pop)} жителей` : ""}</div>${own}${b}`);
       }
       if (!map.hasLayer(townTip)) townTip.addTo(map);
       map.getContainer().classList.add("is-town");
@@ -715,6 +722,30 @@
     $("#deleteText").textContent = `«${row.name || row.id}» (${row.id}) исчезнет с сайта вместе с границами на карте, логин игрока перестанет работать. Таблица Google останется на Диске.`;
     $("#deleteDialog").showModal();
   }
+  // Текст колонки «Постройки» («Ферма x3, Храм») с изменениями [{b: здание, d: ±1}] и разница для «Построено»
+  function shiftBuildings(text, changes) {
+    const S = window.VPISettlements, items = [];
+    for (const part of String(text || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const { name, n } = S.parseBuilding(part), lib = VB.findBuilding(name);
+      items.push({ raw: name, n, lib: lib ? lib.name : name });
+    }
+    const built = {};
+    for (const { b, d } of changes) {
+      const it = items.find((x) => x.lib === b && x.n > 0);
+      if (d < 0 && !it) continue;
+      if (it) it.n += d; else items.push({ raw: b, n: d, lib: b });
+      built[b] = (built[b] || 0) + d;
+    }
+    return { text: items.filter((x) => x.n > 0).map((x) => (x.n > 1 ? `${x.raw} x${x.n}` : x.raw)).join(", "), built };
+  }
+  // Всё, что государство показывает на карте (города, деревни, постройки), — отдельными объектами без хозяина
+  function stateObjects(id) {
+    const f = bordersGeo && bordersGeo.features.find((x) => x.properties.id === id), s = state.byId.get(id);
+    const pv = f && f.properties.provinces;
+    if (!pv || !pv.towns || !window.VPISettlements) return [];
+    const prep = window.VPISettlements.prepare(pv, (s && s.public && s.public.provinces) || null, (s && s.color) || "#FFD700", s && s.style);
+    return prep ? window.VPISettlements.itemsToObjects(prep.items, "", s ? s.name : id, s && s.style) : [];
+  }
   $("#deleteForm").addEventListener("change", (e) => {
     const f = e.currentTarget;
     $("#deleteGo").disabled = !(f.c1.checked && f.c2.checked);
@@ -726,6 +757,9 @@
     if (!deleting || !(f.c1.checked && f.c2.checked)) return;
     $("#deleteGo").disabled = true;
     try {
+      // города, деревни и постройки государства остаются на карте без хозяина
+      const left = stateObjects(deleting.id);
+      if (left.length && !DEMO) await api.admin("adminSaveObjects", { objects: ((bordersGeo && bordersGeo.objects) || []).concat(left) });
       await api.admin("adminDeleteState", { stateId: deleting.id });
       $("#deleteDialog").close();
       if (state.selected === deleting.id) closePanel();
@@ -1775,6 +1809,7 @@
     if (state.selected) closePanel();
     $("#brushBtn").disabled = true;
     vector.setTerritories([], () => null);          // на время правки старые границы прячем
+    vector.setObjects([], objOwner);
     if (bordersLayer) bordersLayer.remove();
     labelsLayer.clearLayers();
     provinceLabels.clearLayers();
@@ -1782,6 +1817,7 @@
       map, nativeZ: NATIVE_Z, mountains, lakes,
       states: ((state.data && state.data.states) || []).map((s) => ({ id: s.id, name: s.name, color: s.color })),
       borders: bordersGeo,
+      objects: (bordersGeo && bordersGeo.objects) || [],
       info: (id) => { const s = state.byId.get(id); return s ? { regions: (s.public && s.public.provinces) || null, style: s.style } : null; },
       loadGrid: async () => (DEMO ? null : (await api.admin("adminGetGrid")).grid),
       // провинции — это регионы из таблицы государства
@@ -1790,10 +1826,49 @@
         state.ledgers.set(id, led);
         return ((led && led.regions) || []).map((r) => r.name);
       },
-      save: async ({ grid, geometries, provinces }) => {
-        if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries, provinces });
-        bordersGeo = { type: "FeatureCollection", features: Object.entries(geometries).filter(([, g]) => g)
+      save: async ({ grid, geometries, provinces, objects }) => {
+        if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries, provinces, objects });
+        bordersGeo = { type: "FeatureCollection", objects, features: Object.entries(geometries).filter(([, g]) => g)
           .map(([id, geometry]) => ({ type: "Feature", properties: provinces[id] ? { id, provinces: provinces[id] } : { id }, geometry })) };
+      },
+      // Захват и потеря построек — в таблицы: колонка «Постройки» региона и «Построено» (по государству за раз)
+      applyTransfers: async (transfers, objects) => {
+        const errors = [], back = [];
+        const byState = new Map();
+        for (const t of transfers) { if (!byState.has(t.id)) byState.set(t.id, []); byState.get(t.id).push(t); }
+        for (const [id, list] of byState) {
+          const s = state.byId.get(id), sname = s ? s.name : id;
+          try {
+            const regions = DEMO
+              ? ((s && s.public && s.public.provinces) || []).map((r, i) => ({ row: 4 + i, name: r.name, buildings: (r.buildings || []).join(", ") }))
+              : (await api.admin("adminReadBuildings", { stateId: id })).regions;
+            const byRegion = new Map();
+            for (const t of list) { if (!byRegion.has(t.region)) byRegion.set(t.region, []); byRegion.get(t.region).push(t); }
+            for (const [name, ts] of byRegion) {
+              const r = regions.find((x) => x.name === name);
+              if (!r) { errors.push(`«${sname}»: в таблице нет региона «${name}»`); ts.forEach((t) => t.obj && back.push(t.obj)); continue; }
+              const { text, built } = shiftBuildings(r.buildings, ts);
+              if (DEMO) {
+                const pr = s.public.provinces.find((x) => x.name === name);
+                if (pr) pr.buildings = text ? text.split(", ") : [];
+                continue;
+              }
+              const res = await api.admin("adminWriteBuildings", { stateId: id, row: r.row, name: r.name, buildings: text, built });
+              if (res.public && s) s.public = res.public;
+              if (res.warning) errors.push(`«${sname}»: ${res.warning}`);
+              state.ledgers.delete(id);
+            }
+          } catch (err) {
+            errors.push(`«${sname}»: ${err.message}`);
+            list.forEach((t) => t.obj && back.push(t.obj));
+          }
+        }
+        // не записанные новому хозяину постройки остаются на карте отдельными объектами
+        if (back.length) {
+          objects.push(...back.filter((o) => !objects.includes(o)));
+          if (!DEMO) await api.admin("adminSaveObjects", { objects }).catch((err) => errors.push(err.message));
+        }
+        return errors.length ? errors.join("; ") : "";
       },
       onClose: () => {
         window.VPI_EDITING = false;

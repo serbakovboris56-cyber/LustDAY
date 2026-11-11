@@ -459,7 +459,7 @@
         ctx.globalAlpha = t.selected ? 0.45 : 0.32; ctx.fillStyle = t.color; ctx.fill(p, "evenodd");
       }
       ctx.globalAlpha = 1;
-      const S = window.VPISettlements, towns = S ? territories.filter((t) => t.settle).map((t) => t.settle) : [];
+      const S = window.VPISettlements, towns = S ? settleList() : [];
       // дороги между городами и деревнями — под горами (идут между вершинами) и под реками
       if (towns.length) S.drawRoads(ctx, k, view, towns);
       // горы: не рисуем, пока значок меньше 3 экранных пикселей; на рельефе их показывает цвет
@@ -496,6 +496,14 @@
       // города, деревни и постройки — поверх всего, без обрезки по берегу
       if (towns.length) S.drawIcons(ctx, k, view, towns);
     }
+
+    // поселения государств и отдельные объекты карты (без хозяина, захваченные, поставленные админом)
+    let objSettle = null, objKey = "";
+    const settleList = () => {
+      const l = territories.filter((t) => t.settle).map((t) => t.settle);
+      if (objSettle) l.push(objSettle);
+      return l;
+    };
 
     const layer = new Layer({ tileSize: 256, noWrap: true, minZoom: 0, maxZoom: nativeZ + 1, keepBuffer: 3, updateWhenZooming: false });
     layer.addTo(map);
@@ -546,7 +554,17 @@
       // "biomes" — обычная карта, "relief" — рельеф по поясам высот (легенда — VPIVectorMap.RELIEF)
       setMode(m) { if (m !== mode) { mode = m; repaint(null); } },
       // город под точкой карты (x, y в пикселях исходной карты) при масштабе k — для подсказки
-      townAt(x, y, k) { return window.VPISettlements ? window.VPISettlements.townAt(territories.filter((t) => t.settle).map((t) => t.settle), x, y, k) : null; },
+      townAt(x, y, k) { return window.VPISettlements ? window.VPISettlements.townAt(settleList(), x, y, k) : null; },
+      // отдельные объекты карты: list — [{id, t, x, y, o, …}] (см. prepareObjects), info(id) -> {color, name, style}
+      setObjects(list, info) {
+        const key = JSON.stringify([list || [], (list || []).map((o) => o && o.o ? info(o.o) : null)]);
+        if (key === objKey) return;
+        objKey = key;
+        const old = objSettle;
+        objSettle = window.VPISettlements && list && list.length ? window.VPISettlements.prepareObjects(list, info) : null;
+        const boxes = [old && old.box, objSettle && objSettle.box].filter(Boolean);
+        if (boxes.length) repaint(boxes);
+      },
     };
   }
 

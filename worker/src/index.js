@@ -109,7 +109,8 @@ async function handlePost(body, env, ctx, request) {
     case "adminFindCopy": await requireAdmin(env, body.token); return adminFindCopy(env, ctx, body.stateId);
     case "adminSaveSettings": await requireAdmin(env, body.token); return adminSaveSettings(env, body.settings);
     case "adminGetGrid": await requireAdmin(env, body.token); return new RawJSON(`{"ok":true,"grid":${(await env.KV.get("territory_grid")) || "null"}}`);
-    case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries, body.provinces);
+    case "adminSaveTerritories": await requireAdmin(env, body.token); return adminSaveTerritories(env, body.grid, body.geometries, body.provinces, body.objects);
+    case "adminSaveObjects": await requireAdmin(env, body.token); return adminSaveObjects(env, body.objects);
     case "adminTurnBoard": await requireAdmin(env, body.token); return adminTurnBoard(env, ctx);
     case "adminTurnMark": await requireAdmin(env, body.token); return adminTurnMark(env, body.stateId, body.ready, body.turn, body.orders);
     case "adminFreeze": await requireAdmin(env, body.token); return adminFreeze(env, ctx, body.stateId, !!body.frozen);
@@ -608,6 +609,9 @@ async function bordersPayload(env) {
   ]);
   const provById = new Map(prov.results.map((r) => [r.state_id, r.data]));
   const isObj = (t) => typeof t === "string" && t[0] === "{" && t[t.length - 1] === "}";
+  // отдельные объекты карты лежат строкой {"list":[…]} — отдаём список как есть
+  const objRow = provById.get(OBJECTS_ROW);
+  const objects = isObj(objRow) && objRow.startsWith('{"list":') ? objRow.slice(8, -1) : "[]";
   const features = [];
   for (const r of results) {
     if (!isObj(r.geometry)) continue;      // битая запись пропускается
@@ -615,7 +619,7 @@ async function bordersPayload(env) {
     const p = provById.get(r.state_id);
     features.push(`{"type":"Feature","properties":{"id":${JSON.stringify(r.state_id)}${isObj(p) ? `,"provinces":${p}` : ""}},"geometry":${r.geometry}}`);
   }
-  return new RawJSON(`{"type":"FeatureCollection","features":[${features.join(",")}]}`);
+  return new RawJSON(`{"type":"FeatureCollection","objects":${objects},"features":[${features.join(",")}]}`);
 }
 
 /* ============================================================
@@ -1330,6 +1334,33 @@ function cleanManual(m) {
   return out;
 }
 
+/* Отдельные объекты карты: города, деревни и постройки, которые стоят в своей точке сами по себе (без хозяина,
+ * захваченные или поставленные админом), см. assets/settlements.js prepareObjects. Хранятся строкой таблицы
+ * provinces с id «~objects» (такого id у государства быть не может), поэтому попадают в версии территорий. */
+const OBJECTS_ROW = "~objects";
+function cleanObjects(list) {
+  const str = (v, n) => String(v == null ? "" : v).slice(0, n);
+  return (Array.isArray(list) ? list : []).filter((o) => o && Number.isFinite(o.x) && Number.isFinite(o.y) && [0, 1, 2].includes(o.t)).slice(0, 5000).map((o) => {
+    const r = { id: str(o.id, 24) || "o" + Math.random().toString(36).slice(2, 10), t: o.t, x: Math.round(o.x), y: Math.round(o.y), o: str(o.o, 20) };
+    if (o.from) r.from = str(o.from, 60);
+    if (o.s) r.s = str(o.s, 12);
+    if (o.t === 0) { r.n = str(o.n, 60) || "Город"; r.tier = Math.max(0, Math.min(4, Math.round(Number(o.tier) || 0))); }
+    if (o.t === 2) r.b = str(o.b, 60);
+    return r;
+  });
+}
+function objectsStmt(env, objects, now) {
+  return env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3) ON CONFLICT(state_id) DO UPDATE SET data=?2, updated=?3")
+    .bind(OBJECTS_ROW, JSON.stringify({ list: cleanObjects(objects) }), now);
+}
+// Только объекты (без кисти): перед удалением государства сайт оставляет его города и постройки на карте
+async function adminSaveObjects(env, objects) {
+  if (!Array.isArray(objects)) return { ok: false, error: "Нет списка объектов." };
+  await ensureProvinceTable(env);
+  await objectsStmt(env, objects, new Date().toISOString()).run();
+  return { ok: true };
+}
+
 // Места городов, выбранные админом: {stateId: {провинция: [x, y]}}
 function cleanCities(c) {
   if (!c || typeof c !== "object") return undefined;
@@ -1407,7 +1438,7 @@ async function adminTerritoryRestore(env, versionId) {
   // государства, удалённые после снятия версии, не возвращаются вместе с ней
   const alive = new Set((await env.DB.prepare("SELECT id FROM states").all()).results.map((r) => r.id));
   for (const id of Object.keys(snap.borders || {})) if (!alive.has(id)) delete snap.borders[id];
-  for (const id of Object.keys(snap.provinces || {})) if (!alive.has(id)) delete snap.provinces[id];
+  for (const id of Object.keys(snap.provinces || {})) if (!alive.has(id) && id !== OBJECTS_ROW) delete snap.provinces[id];
   for (const [id, g] of Object.entries(snap.borders || {})) stmts.push(env.DB.prepare("INSERT INTO borders (state_id, geometry, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(g), now));
   for (const [id, p] of Object.entries(snap.provinces || {})) stmts.push(env.DB.prepare("INSERT INTO provinces (state_id, data, updated) VALUES (?1, ?2, ?3)").bind(id, JSON.stringify(p), now));
   await env.DB.batch(stmts);   // одна транзакция: карта не останется наполовину старой
@@ -1418,7 +1449,7 @@ async function adminTerritoryRestore(env, versionId) {
 }
 
 // Кисть территорий: сетка клеток (с провинциями) хранится в KV, контуры государств — в borders, провинции — в provinces.
-async function adminSaveTerritories(env, grid, geometries, provinces) {
+async function adminSaveTerritories(env, grid, geometries, provinces, objects) {
   if (!grid || !Array.isArray(grid.rle) || !Array.isArray(grid.owners)) return { ok: false, error: "Нет данных сетки." };
   if (!geometries || typeof geometries !== "object") return { ok: false, error: "Нет контуров." };
   const prov = grid.prov && Array.isArray(grid.prov.rle) ? { rle: grid.prov.rle, names: grid.prov.names || {} } : undefined;
@@ -1442,7 +1473,8 @@ async function adminSaveTerritories(env, grid, geometries, provinces) {
   }
   // контуры и провинции удалённых государств: кисть их больше не присылает, и без этой чистки они жили вечно
   stmts.push(env.DB.prepare("DELETE FROM borders WHERE state_id NOT IN (SELECT id FROM states)"));
-  stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id NOT IN (SELECT id FROM states)"));
+  stmts.push(env.DB.prepare("DELETE FROM provinces WHERE state_id NOT IN (SELECT id FROM states) AND state_id <> ?").bind(OBJECTS_ROW));
+  if (Array.isArray(objects)) stmts.push(objectsStmt(env, objects, now));
   await env.DB.batch(stmts);
   await saveTerritoryVersion(env, "Сохранение кисти", await currentTerritories(env, gridText)).catch((e) => console.error(e));
   return { ok: true };

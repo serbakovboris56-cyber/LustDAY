@@ -409,9 +409,12 @@
       for (let k = 0; k < Math.min(n, 3 - have); k++) list.push({ name, b, key: name + "#" + (have + k) });
     }
     list.sort((p, q) => (q.b ? q.b.cost : 0) - (p.b ? p.b.cost : 0));
-    const spots = t.spots.slice(), fields = t.fields.slice(0, nv * 2).concat(t.fields.slice(nv * 2));
     const place = t.place || {};
-    let coast = t.coast;
+    // места, где уже стоят закреплённые постройки, автоматическим не отдаём (иначе две постройки в одной точке)
+    const pinned = list.map((x) => place[x.key]).filter((pt) => Array.isArray(pt));
+    const free = (pt) => !pinned.some((q) => Math.hypot(q[0] - pt[0], q[1] - pt[1]) < 40);
+    const spots = t.spots.filter(free), fields = t.fields.slice(0, nv * 2).concat(t.fields.slice(nv * 2)).filter(free);
+    let coast = t.coast && free(t.coast) ? t.coast : null;
     const out = [];
     for (const { name, b, key } of list) {
       let at = Array.isArray(place[key]) ? place[key] : null;
@@ -452,7 +455,7 @@
       const pop = reg ? Number(reg.population) || 0 : 0;
       const tier = tierOf(pop), capital = reg ? /столиц/i.test(reg.type || "") : t.i === 0 && data.towns.length > 1;
       const variant = hashStr(t.name) % 3;
-      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 18 + tier * 6, ref: { town: t.name },
+      items.push({ spr: VB.citySprite(tier, capital, color, variant, style), x: t.x, y: t.y, w: CITY_MAP[tier], kind: 0, min: 18 + tier * 6, ref: { town: t.name }, tier, capital,
         tip: { name: t.name, tier: TIER_NAMES[tier], capital, pop, buildings: reg ? reg.buildings || [] : [] } });
       grow(t.x, t.y);
       const nv = reg ? Math.min(t.villages.length, villagesFor(pop)) : Math.min(t.villages.length, 2);
@@ -464,13 +467,62 @@
       }
       for (const { b, at, tip, key } of placeBuildings(t, reg, nv)) {
         const spr = (b && VB.buildingSprite(b, style, color)) || VB.genericSprite(style, color);
-        items.push({ spr, x: at[0], y: at[1], w: spr.nw * B_MAP, kind: 2, tip, ref: { town: t.name, b: key } });
+        items.push({ spr, x: at[0], y: at[1], w: spr.nw * B_MAP, kind: 2, tip, ref: { town: t.name, b: key }, bname: tip.name });
         grow(at[0], at[1]);
       }
     });
     for (const r of links.concat(vroads)) { grow(r.b[0], r.b[1]); grow(r.b[2], r.b[3]); }
     items.sort((a, b) => a.y - b.y);
     return { items, links, vroads, box };
+  }
+
+  /* ---------------- отдельные объекты карты ----------------
+   * Город, деревня или постройка, которые больше не часть провинции своего государства: территорию стёрли,
+   * провинцию захватили, государство удалили, или админ поставил объект сам. Такой объект стоит в своей точке
+   * карты, пока его не удалят, а хозяин у него — государство, чья территория под ним (или никто).
+   * { id, t: 0 город | 1 деревня | 2 постройка, x, y, o: id хозяина или "", n: название города,
+   *   b: название постройки, tier: уровень города, cap: была столицей, s: стиль, from: кто построил } */
+  const NO_OWNER = "#8C8C8C";
+  // info(id) -> { color, name, style } живого государства или null
+  function prepareObjects(list, info) {
+    const VB = window.VPIBuildings;
+    if (!VB || !Array.isArray(list) || !list.length) return null;
+    const items = [];
+    let box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const o of list) {
+      if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.y)) continue;
+      const own = o.o ? info(o.o) : null;
+      const color = own ? own.color : NO_OWNER, style = o.s || (own && own.style) || undefined;
+      const owner = own ? own.name : "Без хозяина";
+      const ref = { obj: o.id };
+      if (o.t === 0) {
+        const tier = Math.max(0, Math.min(4, Number(o.tier) || 0)), name = o.n || "Город";
+        items.push({ spr: VB.citySprite(tier, false, color, hashStr(name) % 3, style), x: o.x, y: o.y, w: CITY_MAP[tier], kind: 0, min: 18 + tier * 6, ref, tier,
+          tip: { name, tier: TIER_NAMES[tier], capital: false, pop: 0, buildings: [], owner, from: o.from || "" } });
+      } else if (o.t === 1) {
+        items.push({ spr: VB.villageSprite(hashStr(o.id) % 2, style), x: o.x, y: o.y, w: VILLAGE_MAP, kind: 1, ref });
+      } else {
+        const b = VB.findBuilding(o.b || "");
+        const spr = (b && VB.buildingSprite(b, style, color)) || VB.genericSprite(style, color);
+        items.push({ spr, x: o.x, y: o.y, w: spr.nw * B_MAP, kind: 2, ref, bname: b ? b.name : o.b, tip: { name: b ? b.name : o.b || "Постройка", town: owner, building: true } });
+      }
+      box = [Math.min(box[0], o.x), Math.min(box[1], o.y), Math.max(box[2], o.x), Math.max(box[3], o.y)];
+    }
+    if (!items.length) return null;
+    items.sort((a, b) => a.y - b.y);
+    return { items, links: [], vroads: [], box: [box[0] - 200, box[1] - 200, box[2] + 200, box[3] + 200] };
+  }
+
+  const newObjId = () => "o" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  // Значки государства (из prepare) -> отдельные объекты карты с хозяином owner ("" — без хозяина)
+  function itemsToObjects(items, owner, fromName, style) {
+    return items.map((it) => {
+      const o = { id: newObjId(), t: it.kind, x: Math.round(it.x), y: Math.round(it.y), o: owner || "", from: fromName || "" };
+      if (style) o.s = style;
+      if (it.kind === 0) { o.n = it.ref.town; o.tier = it.tier || 0; o.cap = !!it.capital; }
+      if (it.kind === 2) o.b = it.bname || "";
+      return o;
+    });
   }
 
   // Когда что видно (k — экранных пикселей на пиксель карты)
@@ -535,5 +587,5 @@
     return best && best.tip;
   }
 
-  window.VPISettlements = { compute, cityPoints, prepare, placeBuildings, costGrid, drawRoads, drawIcons, townAt, parseBuilding, villagesFor, tierOf, TIER_NAMES, CELL };
+  window.VPISettlements = { prepareObjects, itemsToObjects, newObjId, NO_OWNER, VILLAGE_SLOTS, compute, cityPoints, prepare, placeBuildings, costGrid, drawRoads, drawIcons, townAt, parseBuilding, villagesFor, tierOf, TIER_NAMES, CELL };
 })();
