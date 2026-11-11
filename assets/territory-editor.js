@@ -882,6 +882,7 @@
         if (m && kind === 1 && m.v) delete m.v[sub];
         if (m && kind === 2 && m.b) delete m.b[sub];
       };
+      const lostB = [];          // постройки, которые государство потеряло (уходят из его таблицы)
       const stays = new Set();   // "id|провинция|c" / "|v3" / "|b:Ферма#0" — места, занятые тем, что осталось на месте
       let lost = 0, taken = 0;
       const takenBy = {};
@@ -899,6 +900,7 @@
         }
         const st = stateOf(id), inf = (opts.info && opts.info(id)) || {};
         objects.push(S.itemsToObjects([it], here ? here.id : "", st ? st.name : id, inf.style)[0]);
+        if (it.kind === 2) { const cut = sub.lastIndexOf("#"); lostB.push({ id, town, raw: sub.slice(0, cut), idx: Number(sub.slice(cut + 1)), b: it.bname }); }
         dropPin(id, it.kind, town, sub);
         if (here) { taken++; const n = (stateOf(here.id) || {}).name || here.id; takenBy[n] = (takenBy[n] || 0) + 1; } else lost++;
       }
@@ -942,6 +944,51 @@
         }
         if (!done) left.push(o);
       }
+      // Таблицы: потерянные постройки убираются из «Регионов» и «Построено» прежнего владельца, захваченные
+      // добавляются в регион захватчика, под которым они стоят (если такой регион есть в его таблице).
+      const VB = window.VPIBuildings, adds = [], addCount = {};
+      for (const o of left) {
+        if (o.t !== 2 || !o.b) continue;
+        const h = provAt(o.x, o.y), reg = h && regionOf(h.id, h.name);
+        if (!reg) continue;
+        let raw = o.b, have = 0;
+        for (const r0 of reg.buildings || []) {
+          const { name, n } = S.parseBuilding(r0), lib = VB.findBuilding(name);
+          if ((lib ? lib.name : name) === o.b) { raw = name; have += n; }
+        }
+        const ck = `${h.id}|${h.name}|${raw}`;
+        const idx = have + (addCount[ck] || 0);
+        addCount[ck] = (addCount[ck] || 0) + 1;
+        adds.push({ o, id: h.id, town: h.name, raw, idx });
+      }
+      const transfers = [];
+      if ((lostB.length || adds.length) && confirm(`Обновить таблицы государств по карте?\n`
+        + (lostB.length ? `— убрать у прежних владельцев построек: ${lostB.length}\n` : "")
+        + (adds.length ? `— добавить новым хозяевам (в регион под постройкой): ${adds.length}\n` : "")
+        + `\nМеняются колонка «Постройки» на листе «Регионы» и «Построено» на листе «Стройки». «Отмена» — только карта.`)) {
+        // у прежнего владельца оставшиеся постройки того же вида получают номера по порядку, места сохраняются
+        const groups = new Map();
+        for (const l of lostB) {
+          const k = `${l.id}|${l.town}|${l.raw}`;
+          if (!groups.has(k)) groups.set(k, { ...l, gone: new Set() });
+          groups.get(k).gone.add(l.idx);
+          transfers.push({ id: l.id, region: l.town, b: l.b, d: -1 });
+        }
+        for (const g of groups.values()) {
+          const m = manual[g.id] && manual[g.id].towns && manual[g.id].towns[g.town];
+          if (!m || !m.b) continue;
+          const keep = Object.keys(m.b).filter((k) => k.slice(0, k.lastIndexOf("#")) === g.raw)
+            .map((k) => Number(k.slice(k.lastIndexOf("#") + 1))).filter((i) => !g.gone.has(i)).sort((a, b) => a - b);
+          const pts = keep.map((i) => m.b[g.raw + "#" + i]);
+          for (const k of Object.keys(m.b)) if (k.slice(0, k.lastIndexOf("#")) === g.raw) delete m.b[k];
+          pts.forEach((pt, j) => { m.b[g.raw + "#" + j] = pt; });
+        }
+        for (const a of adds) {
+          transfers.push({ id: a.id, region: a.town, b: a.o.b, d: 1, obj: a.o });
+          // на карте её рисует уже провинция нового хозяина (одного вида — не больше трёх значков)
+          if (a.idx < 3) { setPin(a.id, 2, a.town, a.raw + "#" + a.idx, [a.o.x, a.o.y]); left.splice(left.indexOf(a.o), 1); }
+        }
+      }
       objects = left;
       let joined = 0;
       return {
@@ -956,13 +1003,14 @@
             objects.push(a.o);
           }
         },
+        transfers,
         report() {
           const parts = [];
           if (taken) parts.push(`перешли к другому государству: ${taken} (${Object.entries(takenBy).map(([n, c]) => `«${n}» ${c}`).join(", ")})`);
           if (lost) parts.push(`остались на карте без хозяина: ${lost}`);
           if (moved) parts.push(`отдельные объекты сменили хозяина: ${moved}`);
           if (joined) parts.push(`вошли в провинции новых хозяев: ${joined}`);
-          return parts.length ? "Города, деревни и постройки вне своих провинций не удалены:\n— " + parts.join("\n— ") + "\n\nЗахваченные постройки остаются и в таблице прежнего владельца: при необходимости уберите их там на листе «Регионы»." : "";
+          return parts.length ? "Города, деревни и постройки вне своих провинций не удалены:\n— " + parts.join("\n— ") + (transfers.length ? `\n\nТаблицы: изменений построек ${transfers.length}.` : "") : "";
         },
       };
     }
@@ -970,7 +1018,7 @@
     ui.querySelector("#brushSave").onclick = async () => {
       const btn = ui.querySelector("#brushSave");
       btn.disabled = true; msg("Строю границы…");
-      let report = "";
+      let report = "", transfers = [];
       try {
         await new Promise((r) => setTimeout(r, 30));
         fillGaps(owner, land, W, H);
@@ -992,6 +1040,7 @@
           const towns = window.VPISettlements.compute(settleOpts());
           bind.verify(towns);
           report = bind.report();
+          transfers = bind.transfers;
           owners.forEach((id) => {
             if (!geometries[id] || !towns[id] || !towns[id].towns.length) return;
             provinces[id] = { ...(provinces[id] || { lines: [], labels: [] }), towns: towns[id].towns, links: towns[id].links };
@@ -1001,6 +1050,11 @@
         const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) }, cities, manual };
         await opts.save({ grid, geometries, provinces, objects });
         dirty = false;
+        if (transfers.length && opts.applyTransfers) {
+          msg("Записываю постройки в таблицы…");
+          const fail = await opts.applyTransfers(transfers, objects).catch((err) => err.message);
+          if (fail) report += "\n\nНе всё записалось в таблицы: " + fail;
+        }
         close(true);
         if (report) setTimeout(() => alert(report), 50);
       } catch (err) {

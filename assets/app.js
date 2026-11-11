@@ -722,6 +722,22 @@
     $("#deleteText").textContent = `«${row.name || row.id}» (${row.id}) исчезнет с сайта вместе с границами на карте, логин игрока перестанет работать. Таблица Google останется на Диске.`;
     $("#deleteDialog").showModal();
   }
+  // Текст колонки «Постройки» («Ферма x3, Храм») с изменениями [{b: здание, d: ±1}] и разница для «Построено»
+  function shiftBuildings(text, changes) {
+    const S = window.VPISettlements, items = [];
+    for (const part of String(text || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const { name, n } = S.parseBuilding(part), lib = VB.findBuilding(name);
+      items.push({ raw: name, n, lib: lib ? lib.name : name });
+    }
+    const built = {};
+    for (const { b, d } of changes) {
+      const it = items.find((x) => x.lib === b && x.n > 0);
+      if (d < 0 && !it) continue;
+      if (it) it.n += d; else items.push({ raw: b, n: d, lib: b });
+      built[b] = (built[b] || 0) + d;
+    }
+    return { text: items.filter((x) => x.n > 0).map((x) => (x.n > 1 ? `${x.raw} x${x.n}` : x.raw)).join(", "), built };
+  }
   // Всё, что государство показывает на карте (города, деревни, постройки), — отдельными объектами без хозяина
   function stateObjects(id) {
     const f = bordersGeo && bordersGeo.features.find((x) => x.properties.id === id), s = state.byId.get(id);
@@ -1814,6 +1830,45 @@
         if (!DEMO) await api.admin("adminSaveTerritories", { grid, geometries, provinces, objects });
         bordersGeo = { type: "FeatureCollection", objects, features: Object.entries(geometries).filter(([, g]) => g)
           .map(([id, geometry]) => ({ type: "Feature", properties: provinces[id] ? { id, provinces: provinces[id] } : { id }, geometry })) };
+      },
+      // Захват и потеря построек — в таблицы: колонка «Постройки» региона и «Построено» (по государству за раз)
+      applyTransfers: async (transfers, objects) => {
+        const errors = [], back = [];
+        const byState = new Map();
+        for (const t of transfers) { if (!byState.has(t.id)) byState.set(t.id, []); byState.get(t.id).push(t); }
+        for (const [id, list] of byState) {
+          const s = state.byId.get(id), sname = s ? s.name : id;
+          try {
+            const regions = DEMO
+              ? ((s && s.public && s.public.provinces) || []).map((r, i) => ({ row: 4 + i, name: r.name, buildings: (r.buildings || []).join(", ") }))
+              : (await api.admin("adminReadBuildings", { stateId: id })).regions;
+            const byRegion = new Map();
+            for (const t of list) { if (!byRegion.has(t.region)) byRegion.set(t.region, []); byRegion.get(t.region).push(t); }
+            for (const [name, ts] of byRegion) {
+              const r = regions.find((x) => x.name === name);
+              if (!r) { errors.push(`«${sname}»: в таблице нет региона «${name}»`); ts.forEach((t) => t.obj && back.push(t.obj)); continue; }
+              const { text, built } = shiftBuildings(r.buildings, ts);
+              if (DEMO) {
+                const pr = s.public.provinces.find((x) => x.name === name);
+                if (pr) pr.buildings = text ? text.split(", ") : [];
+                continue;
+              }
+              const res = await api.admin("adminWriteBuildings", { stateId: id, row: r.row, name: r.name, buildings: text, built });
+              if (res.public && s) s.public = res.public;
+              if (res.warning) errors.push(`«${sname}»: ${res.warning}`);
+              state.ledgers.delete(id);
+            }
+          } catch (err) {
+            errors.push(`«${sname}»: ${err.message}`);
+            list.forEach((t) => t.obj && back.push(t.obj));
+          }
+        }
+        // не записанные новому хозяину постройки остаются на карте отдельными объектами
+        if (back.length) {
+          objects.push(...back.filter((o) => !objects.includes(o)));
+          if (!DEMO) await api.admin("adminSaveObjects", { objects }).catch((err) => errors.push(err.message));
+        }
+        return errors.length ? errors.join("; ") : "";
       },
       onClose: () => {
         window.VPI_EDITING = false;
