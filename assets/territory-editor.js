@@ -317,6 +317,26 @@
       });
     }
 
+    /* Отдельные объекты карты (города, деревни, постройки, у которых нет своей провинции) и всё, что государства
+     * показывали на карте до правки. При сохранении то, что оказалось вне своей провинции (территорию стёрли или
+     * перекрасили в другое государство), не пропадает, а становится отдельным объектом в той же точке. */
+    let objects = (opts.objects || []).filter((o) => o && Number.isFinite(o.x) && Number.isFinite(o.y)).map((o) => ({ ...o }));
+    const stateOf = (id) => opts.states.find((s) => s.id === id);
+    const objInfo = (id) => { const st = stateOf(id); return st ? { color: st.color, name: st.name, style: ((opts.info && opts.info(id)) || {}).style } : null; };
+    const oldItems = [];
+    if (window.VPISettlements && opts.borders) {
+      for (const f of opts.borders.features || []) {
+        const id = f.properties.id, pv = f.properties.provinces, st = stateOf(id);
+        if (!st || !pv || !Array.isArray(pv.towns) || !pv.towns.length) continue;
+        const inf = (opts.info && opts.info(id)) || {};
+        try {
+          const prep = window.VPISettlements.prepare(pv, inf.regions, st.color, inf.style);
+          if (prep) for (const it of prep.items) oldItems.push({ id, it });
+        } catch (err) { console.error(err); }
+      }
+    }
+    const resetIds = new Set();    // государства, которым в этот раз сбросили ручные правки поселений
+
     // старые раскраски делались по более грубой сетке — сразу добираем пропуски у берега
     const gapsOnOpen = saved || (opts.borders && opts.borders.features.length) ? fillGaps(owner, land, W, H) : 0;
     let dirty = gapsOnOpen > 0;
@@ -512,7 +532,36 @@
           markers.push([mk, it]);
         }
       }
+      drawObjects();
       if (picked) showHandles();
+    }
+    // отдельные объекты: перетаскиваются куда угодно на суше, правая кнопка мыши — удалить
+    function drawObjects() {
+      const live = objects.map((o) => ({ ...o, o: (provAt(o.x, o.y) || {}).id || "" }));
+      const prep = S().prepareObjects(live, objInfo);
+      if (!prep) return;
+      for (const it of prep.items) {
+        const obj = objects.find((o) => o.id === it.ref.obj), own = live.find((o) => o.id === it.ref.obj).o;
+        const what = it.kind === 0 ? it.tip.name : it.kind === 1 ? "Деревня" : it.tip.name;
+        const mk = L.marker(toLL(it.x, it.y), { icon: iconFor(it), draggable: true, zIndexOffset: 300, autoPan: true })
+          .bindTooltip(escHtml(`${what} · ${own ? (stateOf(own) || {}).name || own : "без хозяина"}`) + "<br><small>правая кнопка — удалить</small>", { direction: "top", offset: [0, -10] });
+        mk.on("dragend", () => {
+          const p = map.project(mk.getLatLng(), nativeZ), x = Math.round(p.x), y = Math.round(p.y);
+          if (wet(x, y)) { mk.setLatLng(toLL(obj.x, obj.y)); msg("Сюда нельзя: это вода.", true); return; }
+          obj.x = x; obj.y = y; dirty = true;
+          const h = provAt(x, y);
+          msg(h ? `Передвинуто. Хозяин — «${(stateOf(h.id) || {}).name || h.id}» (по территории под объектом).` : "Передвинуто. Здесь ничья земля: объект без хозяина.");
+          drawSettle();
+        });
+        mk.on("contextmenu", (e) => {
+          L.DomEvent.preventDefault(e.originalEvent || e);
+          if (!confirm(`Удалить с карты: ${what}?`)) return;
+          objects = objects.filter((o) => o !== obj); dirty = true;
+          drawSettle(); msg("Объект удалён с карты.");
+        });
+        mk.addTo(settleLayer);
+        markers.push([mk, it]);
+      }
     }
     function addRoad(line, ref) {
       if (!line || line.length < 2) return;
@@ -613,14 +662,46 @@
     }
     function leaveSettle() {
       if (drawingRoad) { drawingRoad.layer.remove(); drawingRoad = null; }
+      if (addSel.value !== "") { addSel.value = ""; addSel.onchange(); }
       picked = null;
       roadLayer.remove(); settleLayer.remove(); handleLayer.remove(); handleLayer.clearLayers();
       map.off("zoomend", refreshIcons);
       overlay.setOpacity(1);
     }
+    const addSel = ui.querySelector("#settleAdd"), addName = ui.querySelector("#settleAddName"), addTier = ui.querySelector("#settleAddTier");
+    const blist = ui.querySelector("#settleBList");
+    if (blist && window.VPIBuildings && !blist.options.length) blist.innerHTML = window.VPIBuildings.LIBRARY.map((b) => `<option value="${escHtml(b.name)}">`).join("");
+    addSel.onchange = () => {
+      const t = addSel.value;
+      addName.hidden = t === "" || t === "1";
+      addTier.hidden = t !== "0";
+      addName.placeholder = t === "0" ? "Название города" : "Постройка";
+      addName.setAttribute("list", t === "2" ? "settleBList" : "");
+      addName.value = "";
+      if (t !== "") msg(t === "0" ? "Впишите название и щёлкните по карте — там встанет город. Хозяин — государство, чья территория под ним." : t === "1" ? "Щёлкните по карте — там встанет деревня." : "Выберите постройку из списка и щёлкните по карте.");
+      else roadMsg();
+    };
+    function placeObject(pt) {
+      const t = Number(addSel.value);
+      if (wet(pt[0], pt[1])) { msg("Сюда нельзя: это вода.", true); return; }
+      const name = addName.value.trim();
+      const o = { id: S().newObjId(), t, x: pt[0], y: pt[1], o: "" };
+      const h = provAt(pt[0], pt[1]);
+      if (h) { o.o = h.id; o.from = (stateOf(h.id) || {}).name || h.id; const st = (opts.info && opts.info(h.id)) || {}; if (st.style) o.s = st.style; }
+      if (t === 0) { o.n = name || "Город"; o.tier = Number(addTier.value) || 0; }
+      if (t === 2) {
+        const b = window.VPIBuildings && window.VPIBuildings.findBuilding(name);
+        if (!b) { msg("Такой постройки нет в списке — выберите из подсказок.", true); return; }
+        o.b = b.name;
+      }
+      objects.push(o); dirty = true;
+      drawSettle();
+      msg(`Поставлено${h ? `, хозяин — «${(stateOf(h.id) || {}).name || h.id}»` : ", без хозяина"}. Можно ставить ещё или выбрать «Поставить…», чтобы закончить.`);
+    }
     function settleClick(e) {
       if (mode !== "settle") return;
       const p = map.project(e.latlng, nativeZ), pt = [Math.round(p.x), Math.round(p.y)];
+      if (addSel.value !== "" && !drawingRoad) { placeObject(pt); return; }
       if (drawingRoad) {
         drawingRoad.pts.push(pt);
         drawingRoad.layer.setLatLngs(drawingRoad.pts.map(([x, y]) => toLL(x, y)));
@@ -666,6 +747,8 @@
       if (!manual[id]) { msg(`У «${st ? st.name : id}» нет ручных правок.`); return; }
       if (!confirm(`Сбросить ручные правки дорог, деревень и построек государства «${st ? st.name : id}»?`)) return;
       delete manual[id];
+      if (cities[id]) delete cities[id];
+      resetIds.add(id);
       dirty = true;
       picked = null; handleLayer.clearLayers();
       recompute(); drawSettle();
@@ -770,9 +853,124 @@
       if (dirty && !confirm("Выйти без сохранения? Нарисованное пропадёт.")) return;
       close(false);
     };
+    /* Привязка к точкам карты, перед раскладкой поселений при сохранении (сетка уже новая):
+     * 1) всё, что государство показывало до правки и что по-прежнему в его провинции, закрепляется на своём месте
+     *    (город, деревня или постройка не переезжают, когда меняется форма провинции);
+     * 2) то, что оказалось вне своей провинции, становится отдельным объектом в той же точке. Хозяин — государство,
+     *    чья теперь там территория (захват), или никто (территорию стёрли);
+     * 3) отдельный объект на территории государства занимает свободное место в его провинции: город — если
+     *    у провинции ещё нет города (новая провинция из захваченной земли), деревня — свободную деревню,
+     *    постройка — такую же постройку из списка региона, которой на карте ещё нет. Тогда он снова часть провинции. */
+    function bindObjects() {
+      const S = window.VPISettlements;
+      const near = (a, b) => Array.isArray(a) && Array.isArray(b) && Math.abs(a[0] - b[0]) <= CELL && Math.abs(a[1] - b[1]) <= CELL;
+      const pinOf = (id, it) => {
+        const town = it.ref.town;
+        if (it.kind === 0) return cities[id] && cities[id][town];
+        const m = manual[id] && manual[id].towns && manual[id].towns[town];
+        if (!m) return null;
+        return it.kind === 1 ? m.v && m.v[it.ref.v] : m.b && m.b[it.ref.b];
+      };
+      const setPin = (id, kind, town, sub, pt) => {
+        if (kind === 0) { (cities[id] = cities[id] || {})[town] = pt; return; }
+        const t = mTown(id, town);
+        if (kind === 1) (t.v = t.v || {})[sub] = pt; else (t.b = t.b || {})[sub] = pt;
+      };
+      const dropPin = (id, kind, town, sub) => {
+        if (kind === 0) { if (cities[id]) delete cities[id][town]; return; }
+        const m = manual[id] && manual[id].towns && manual[id].towns[town];
+        if (m && kind === 1 && m.v) delete m.v[sub];
+        if (m && kind === 2 && m.b) delete m.b[sub];
+      };
+      const stays = new Set();   // "id|провинция|c" / "|v3" / "|b:Ферма#0" — места, занятые тем, что осталось на месте
+      let lost = 0, taken = 0;
+      const takenBy = {};
+      for (const { id, it } of oldItems) {
+        const town = it.ref.town, sub = it.kind === 1 ? it.ref.v : it.kind === 2 ? it.ref.b : null;
+        const tag = `${id}|${town}|${it.kind === 0 ? "c" : it.kind === 1 ? "v" + sub : "b:" + sub}`;
+        const at = [Math.round(it.x), Math.round(it.y)], pin = pinOf(id, it);
+        // админ в этот раз передвинул его сам — значит, он не потерян, а переехал
+        if (pin && !near(pin, at)) { stays.add(tag); continue; }
+        const here = provAt(at[0], at[1]);
+        if (here && here.id === id && here.name === town) {
+          stays.add(tag);
+          if (!resetIds.has(id) && !pin) setPin(id, it.kind, town, sub, at);
+          continue;
+        }
+        const st = stateOf(id), inf = (opts.info && opts.info(id)) || {};
+        objects.push(S.itemsToObjects([it], here ? here.id : "", st ? st.name : id, inf.style)[0]);
+        dropPin(id, it.kind, town, sub);
+        if (here) { taken++; const n = (stateOf(here.id) || {}).name || here.id; takenBy[n] = (takenBy[n] || 0) + 1; } else lost++;
+      }
+      // хозяин каждого отдельного объекта — по территории под ним
+      let moved = 0;
+      for (const o of objects) { const h = provAt(o.x, o.y), was = o.o || ""; o.o = h ? h.id : ""; if (was !== o.o) moved++; }
+      // объекты занимают свободные места в провинциях
+      const adopted = [];
+      const regionOf = (id, name) => { const regs = ((opts.info && opts.info(id)) || {}).regions || []; return regs.find((r) => r.name === name) || null; };
+      const left = [];
+      for (const o of objects) {
+        const h = provAt(o.x, o.y);
+        let done = false;
+        if (h) {
+          const key = `${h.id}|${h.name}|`;
+          if (o.t === 0 && !stays.has(key + "c") && !(cities[h.id] && cities[h.id][h.name])) {
+            setPin(h.id, 0, h.name, null, [o.x, o.y]); stays.add(key + "c"); adopted.push({ o, id: h.id, town: h.name, kind: 0 }); done = true;
+          } else if (o.t === 1) {
+            const reg = regionOf(h.id, h.name), nv = reg ? S.villagesFor(Number(reg.population) || 0) : 2;
+            const m = manual[h.id] && manual[h.id].towns && manual[h.id].towns[h.name];
+            for (let j = 0; j < Math.min(nv, S.VILLAGE_SLOTS); j++) {
+              if (stays.has(key + "v" + j) || (m && m.v && m.v[j])) continue;
+              setPin(h.id, 1, h.name, j, [o.x, o.y]); stays.add(key + "v" + j); adopted.push({ o, id: h.id, town: h.name, kind: 1, sub: j }); done = true; break;
+            }
+          } else if (o.t === 2) {
+            const reg = regionOf(h.id, h.name), VB = window.VPIBuildings;
+            const counts = {};
+            for (const raw of (reg && reg.buildings) || []) {
+              const { name, n } = S.parseBuilding(raw), b = VB.findBuilding(name);
+              const have = counts[name] || 0;
+              for (let k = 0; k < Math.min(n, 3 - have) && !done; k++) {
+                const sub = name + "#" + (have + k);
+                const m = manual[h.id] && manual[h.id].towns && manual[h.id].towns[h.name];
+                if ((b ? b.name : name) !== o.b || stays.has(key + "b:" + sub) || (m && m.b && m.b[sub])) continue;
+                setPin(h.id, 2, h.name, sub, [o.x, o.y]); stays.add(key + "b:" + sub); adopted.push({ o, id: h.id, town: h.name, kind: 2, sub }); done = true;
+              }
+              counts[name] = have + Math.min(n, 3 - have);
+              if (done) break;
+            }
+          }
+        }
+        if (!done) left.push(o);
+      }
+      objects = left;
+      let joined = 0;
+      return {
+        // раскладка не приняла место (деревня вне свободных мест провинции и т. п.) — объект остаётся отдельным
+        verify(res) {
+          for (const a of adopted) {
+            const r = res[a.id], t = r && r.towns.find((x) => x.name === a.town);
+            const ok = t && (a.kind === 0 ? near([t.x, t.y], [a.o.x, a.o.y])
+              : a.kind === 1 ? t.villages[a.sub] && Math.hypot(t.villages[a.sub][0] - a.o.x, t.villages[a.sub][1] - a.o.y) < CELL * 1.5 : true);
+            if (ok) { joined++; continue; }
+            dropPin(a.id, a.kind, a.town, a.sub);
+            objects.push(a.o);
+          }
+        },
+        report() {
+          const parts = [];
+          if (taken) parts.push(`перешли к другому государству: ${taken} (${Object.entries(takenBy).map(([n, c]) => `«${n}» ${c}`).join(", ")})`);
+          if (lost) parts.push(`остались на карте без хозяина: ${lost}`);
+          if (moved) parts.push(`отдельные объекты сменили хозяина: ${moved}`);
+          if (joined) parts.push(`вошли в провинции новых хозяев: ${joined}`);
+          return parts.length ? "Города, деревни и постройки вне своих провинций не удалены:\n— " + parts.join("\n— ") + "\n\nЗахваченные постройки остаются и в таблице прежнего владельца: при необходимости уберите их там на листе «Регионы»." : "";
+        },
+      };
+    }
+
     ui.querySelector("#brushSave").onclick = async () => {
       const btn = ui.querySelector("#brushSave");
       btn.disabled = true; msg("Строю границы…");
+      let report = "";
       try {
         await new Promise((r) => setTimeout(r, 30));
         fillGaps(owner, land, W, H);
@@ -790,7 +988,10 @@
         if (window.VPISettlements) {
           msg("Раскладываю города, деревни и дороги…");
           await new Promise((r) => setTimeout(r, 0));
+          const bind = bindObjects();
           const towns = window.VPISettlements.compute(settleOpts());
+          bind.verify(towns);
+          report = bind.report();
           owners.forEach((id) => {
             if (!geometries[id] || !towns[id] || !towns[id].towns.length) return;
             provinces[id] = { ...(provinces[id] || { lines: [], labels: [] }), towns: towns[id].towns, links: towns[id].links };
@@ -798,9 +999,10 @@
         }
         msg("Сохраняю…");
         const grid = { w: W, h: H, owners, rle: rle(owner), prov: { rle: rle(prov), names: Object.fromEntries(provNames) }, cities, manual };
-        await opts.save({ grid, geometries, provinces });
+        await opts.save({ grid, geometries, provinces, objects });
         dirty = false;
         close(true);
+        if (report) setTimeout(() => alert(report), 50);
       } catch (err) {
         msg(err.message, true);
       } finally { btn.disabled = false; }
