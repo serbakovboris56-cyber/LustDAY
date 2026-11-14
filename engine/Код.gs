@@ -138,13 +138,13 @@ const GODS = [
 ];
 
 const RESOURCES = [
-  ["[Au] Золото", 0, "+200 монет в год", "Казна"],
-  ["[Fe] Железо", 0, "-5% содержание армии, доступ к броне", "Армия"],
-  ["[Gm] Драг. Камни", 0, "+5 лояльности феодалам, +0,1% единства", "Политика"],
-  ["[Co] Уголь", 0, "+15% к ремеслу", "Ремесло"],
-  ["[Sa] Соль", 0, "+10% эффективной еды, +5% снабжения", "Еда"],
-  ["[In] Благовония", 0, "+1/+0,75/+0,5/+0,25 Клирики", "Клирика"],
-  ["[Si] Шёлк", 0, "+15% торгового дохода", "Торговля"]
+  ["Золото", 0, "+200 монет в год", "Казна"],
+  ["Железо", 0, "-5% содержание армии, доступ к броне", "Армия"],
+  ["Драг. Камни", 0, "+5 лояльности феодалам, +0,1% единства", "Политика"],
+  ["Уголь", 0, "+15% к ремеслу", "Ремесло"],
+  ["Соль", 0, "+10% эффективной еды, +5% снабжения", "Еда"],
+  ["Благовония", 0, "+1/+0,75/+0,5/+0,25 Клирики", "Клирика"],
+  ["Шёлк", 0, "+15% торгового дохода", "Торговля"]
 ];
 
 const EVENTS_CATALOG = [
@@ -399,10 +399,9 @@ function fillStatsSheet(ss) {
   });
   stCell(ws, 16, 8, 5, '="В фонд стройки "&Расчёты!B155&"%: "&FIXED(Расчёты!B158,0)&" рем. · "&FIXED(Расчёты!B159,0)&" мон."', { size: 10, color: C.muted });
 
-  [["Au", "Золото"], ["Fe", "Железо"], ["Gm", "Драг. камни"], ["Co", "Уголь"], ["Sa", "Соль"], ["In", "Благовония"], ["Si", "Шёлк"]].forEach(([b, n], i) => {
+  ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"].forEach((n, i) => {
     const r = 10 + i;
-    stCell(ws, r, 14, 1, b, { font: FONT_TITLE, size: 8, bold: true, color: C.dark, bg: "#C9A646", align: "center" });
-    stCell(ws, r, 15, 3, n, { size: 11 }).setNote(n + ": " + RESOURCES[i][2]);
+    stCell(ws, r, 14, 4, n, { size: 11 }).setNote(n + ": " + RESOURCES[i][2]);
     stCell(ws, r, 18, 1, `=Ресурсы!B${4 + i}`, { size: 11, align: "right" });
   });
 
@@ -448,10 +447,8 @@ function fillResourcesSheet(ss) {
     '=IF(B8>0,"+"&MIN(20,B8*10)&"% еды","—")', '=IF(B9>0,"+"&(IF(B9>=1,1,0)+IF(B9>=2,0.75,0)+IF(B9>=3,0.5,0)+IF(B9>=4,0.25,0))&" клирики за ход","—")',
     '=IF(B10>0,"+"&MIN(30,B10*15)&"% торговли","—")'];
   RESOURCES.forEach((r, i) => {
-    const row = 4 + i; const m = /^\[(\w+)\]\s*(.*)$/.exec(r[0]) || [null, "", r[0]];
-    const label = m[1] + "   " + m[2];
-    ws.getRange(row, 1).setFontFamily(FONT_BODY).setFontSize(12).setFontWeight("bold");
-    ws.getRange(row, 1).setRichTextValue(richRuns(label, [[0, m[1].length, C.gold]]));
+    const row = 4 + i;
+    ws.getRange(row, 1).setFontFamily(FONT_BODY).setFontSize(12).setFontWeight("bold").setValue(r[0]);
     ws.getRange(row, 2).setValue(r[1]);
     ws.getRange(row, 3).setNumberFormat("@").setValue(r[2]);
     ws.getRange(row, 4).setFormula(F(now[i]));
