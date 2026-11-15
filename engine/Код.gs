@@ -384,7 +384,7 @@ function fillStatsSheet(ss) {
     const r = 11 + i;
     stCell(ws, r, 2, 1, name, { size: 11 });
     stCell(ws, r, 3, 1, `=Расчёты!B${14 + i}`, { size: 11, align: "right", fmt: "#,##0" });
-    stCell(ws, r, 5, 1, `=REPT("█",ROUND(Расчёты!B${59 + i}/10))&REPT("░",10-ROUND(Расчёты!B${59 + i}/10))`, { font: FONT_BAR, size: 8, color: C.gold });
+    stCell(ws, r, 5, 1, `=CHOOSE(Расчёты!C${165 + i}+1,"▼▼ Мятеж","▼ Недовольство","• Спокойствие","▲ Верность","▲▲ Преданность")`, { size: 9, color: C.gold });
     stCell(ws, r, 6, 1, `=Расчёты!B${59 + i}`, { size: 11, align: "right", fmt: '0"%"' });
   });
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(30).setFontColor(C.red).setRanges([ws.getRange("F11:F15")]).build());
@@ -750,12 +750,12 @@ function fillCalcSheet(ss) {
   ws.getRange(36,1).setValue("База"); ws.getRange(36,2).setValue(50); 
   ws.getRange(37,1).setValue("От священников"); ws.getRange(37,2).setFormula(F("=B17/100*0.1*(1+B55)")); 
   ws.getRange(38,1).setValue("От камней, благовоний, строек"); ws.getRange(38,2).setFormula(F("=B6*0.1+B9*0.1+B205*100")); 
-  ws.getRange(39,1).setValue("Итого"); ws.getRange(39,2).setFormula(F("=MAX(0,MIN(100,B36+B37+B38-B78+B132+B133))")); 
+  ws.getRange(39,1).setValue("Итого"); ws.getRange(39,2).setFormula(F("=MAX(0,MIN(100,B36+B37+B38-B78+B132+B133+B179))")); 
   [36,37,38,39].forEach(r => { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
   ws.getRange(41,1).setValue("Показатель"); ws.getRange(41,2).setValue("Значение"); styleHeaderRow(ws, 41, 1, 2); 
-  ws.getRange(42,1).setValue("Специалисты"); ws.getRange(42,2).setFormula(F("=MAX(0,B18/10*5*(1-B77)*(1+B208)*(1+B130))")); 
-  ws.getRange(43,1).setValue("Сброд"); ws.getRange(43,2).setFormula(F("=MAX(0,B18/10*20*(1-B77)*(1+B130))")); 
+  ws.getRange(42,1).setValue("Специалисты"); ws.getRange(42,2).setFormula(F("=MAX(0,B18/10*5*(1-B77)*(1+B208)*(1+B130))*B176")); 
+  ws.getRange(43,1).setValue("Сброд"); ws.getRange(43,2).setFormula(F("=MAX(0,B18/10*20*(1-B77)*(1+B130))*B177")); 
   ws.getRange(44,1).setValue("Всего"); ws.getRange(44,2).setFormula(F("=B42+B43")); 
   [42,43,44].forEach(r => { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
@@ -778,7 +778,7 @@ function fillCalcSheet(ss) {
     .forEach(([r, n, f, e]) => { ws.getRange(r,1).setValue(n).setFontFamily(FONT_BODY); ws.getRange(r,2).setFormula(F(f)); ws.getRange(r,3).setValue(e); ws.getRange(r,1,1,3).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
   styleBanner(ws, 75, 1, 3, "Ч И С Л О В Ы Е   М О Д И Ф И К А Т О Р Ы"); ws.getRange(76,1).setValue("Модификатор"); ws.getRange(76,2).setValue("Значение"); styleHeaderRow(ws, 76, 1, 2);
-  const cm = [[77,"Потеря призыва",F('=(IF(B68="ДА",0.5,0)+IF(B71="ДА",0.05,0))*(1-B207)')],[78,"Штраф единства",F('=IF(B68="ДА",5,0)*(1-B207)')],[79,"Множ. еды",F('=((IF(B71="ДА",0.9,1)*IF(B72="ДА",0.85,1)*IF(B73="ДА",0.95,1))*(1-B207)+B207)*IF(B120="ДА",0.9,1)')],[80,"Множ. ремесла",F('=((IF(B67="ДА",0.9,1)*IF(B69="ДА",0.9,1)*IF(B70="ДА",0.9,1)*IF(B72="ДА",0.85,1))*(1-B207)+B207)*IF(B121="ДА",0.8,1)')],[81,"Множ. торговли",F('=((IF(B69="ДА",0.9,1)*IF(B71="ДА",0.9,1))*(1-B207)+B207)*IF(B122="ДА",0.85,1)')]];
+  const cm = [[77,"Потеря призыва",F('=(IF(B68="ДА",0.5,0)+IF(B71="ДА",0.05,0))*(1-B207)')],[78,"Штраф единства",F('=IF(B68="ДА",5,0)*(1-B207)')],[79,"Множ. еды",F('=((IF(B71="ДА",0.9,1)*IF(B72="ДА",0.85,1)*IF(B73="ДА",0.95,1))*(1-B207)+B207)*IF(B120="ДА",0.9,1)*B171')],[80,"Множ. ремесла",F('=((IF(B67="ДА",0.9,1)*IF(B69="ДА",0.9,1)*IF(B70="ДА",0.9,1)*IF(B72="ДА",0.85,1))*(1-B207)+B207)*IF(B121="ДА",0.8,1)*B173')],[81,"Множ. торговли",F('=((IF(B69="ДА",0.9,1)*IF(B71="ДА",0.9,1))*(1-B207)+B207)*IF(B122="ДА",0.85,1)*B174')]];
   cm.forEach(([r,n,f]) => { ws.getRange(r,1).setValue(n).setFontFamily(FONT_BODY); ws.getRange(r,2).setFormula(f).setNumberFormat("0.000"); ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
   styleBanner(ws, 83, 1, 4, "И З М Е Н Е Н И Е   Л О Я Л Ь Н О С Т И"); ws.getRange(84,1).setValue("Сословие"); ws.getRange(84,2).setValue("Ручное"); ws.getRange(84,3).setValue("Авто"); ws.getRange(84,4).setValue("Итог"); styleHeaderRow(ws, 84, 1, 4);
@@ -786,11 +786,11 @@ function fillCalcSheet(ss) {
   const lc = [[85,"Крестьяне",F('=IF(B67="ДА",-3,0)+IF(B70="ДА",-2,0)+IF(B71="ДА",-2,0)+IF(B72="ДА",-5,0)+IF(B73="ДА",-2,0)')],[86,"Ремесленники",F('=IF(B67="ДА",-3,0)+IF(B70="ДА",-2,0)+IF(B71="ДА",-2,0)+IF(B72="ДА",-5,0)')],[87,"Торговцы",F('=IF(B67="ДА",-3,0)+IF(B70="ДА",-2,0)+IF(B71="ДА",-2,0)')],[88,"Священники",F('=IF(B67="ДА",-3,0)+IF(B69="ДА",-5,0)+IF(B70="ДА",-2,0)+IF(B71="ДА",-2,0)')],[89,"Феодалы",F('=IF(B67="ДА",-3,0)+IF(B68="ДА",-5,0)+IF(B70="ДА",-2,0)+IF(B71="ДА",-2,0)')]];
   lc.forEach(([r,n,af]) => { ws.getRange(r,1).setValue(n).setFontFamily(FONT_BODY); ws.getRange(r,2).setValue(0).setNumberFormat('+0"%";-0"%";0"%"'); ws.getRange(r,3).setFormula(af + "+B" + (r + 52) + F(`=0+IF(${r === 89 ? "'Регионы'!M23" : "B" + (r - 26)}>50,-1,0)`).replace(/^= ?0/, "")).setNumberFormat('+0"%";-0"%";0"%"').setHorizontalAlignment("center"); ws.getRange(r,4).setFormula(F(`=B${r}+C${r}`)).setNumberFormat('+0"%";-0"%";0"%"').setHorizontalAlignment("center").setFontWeight("bold"); ws.getRange(r,1,1,4).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
-  styleBanner(ws, 91, 1, 3, "П Р И Р О С Т   Н А С Е Л Е Н И Я"); ws.getRange(92,1).setValue("Показатель"); ws.getRange(92,2).setValue("Значение"); styleHeaderRow(ws, 92, 1, 2); ws.getRange(93,1).setValue("База"); ws.getRange(93,2).setFormula(F("=IF(B23>0,0.01,0)")); ws.getRange(94,1).setValue("Штраф кризисов"); ws.getRange(94,2).setFormula(F('=IF(B67="ДА",0.05,0)+IF(B70="ДА",0.05,0)+IF(B73="ДА",0.02,0)')); ws.getRange(95,1).setValue("Итог"); ws.getRange(95,2).setFormula(F('=IF(B120="ДА",MIN(0,B93-B94+B131),B93-B94+B131)')).setNumberFormat('+0.0%;-0.0%;0.0%'); ws.getRange(96,1).setValue("Чел./год"); ws.getRange(96,2).setFormula(F("=ROUND(B13*B95,0)")); [93,94,95,96].forEach(r => { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
+  styleBanner(ws, 91, 1, 3, "П Р И Р О С Т   Н А С Е Л Е Н И Я"); ws.getRange(92,1).setValue("Показатель"); ws.getRange(92,2).setValue("Значение"); styleHeaderRow(ws, 92, 1, 2); ws.getRange(93,1).setValue("База"); ws.getRange(93,2).setFormula(F("=IF(B23>0,0.01,0)")); ws.getRange(94,1).setValue("Штраф кризисов"); ws.getRange(94,2).setFormula(F('=IF(B67="ДА",0.05,0)+IF(B70="ДА",0.05,0)+IF(B73="ДА",0.02,0)')); ws.getRange(95,1).setValue("Итог"); ws.getRange(95,2).setFormula(F('=IF(B120="ДА",MIN(0,B93-B94+B131),B93-B94+B131)+B172')).setNumberFormat('+0.0%;-0.0%;0.0%'); ws.getRange(96,1).setValue("Чел./год"); ws.getRange(96,2).setFormula(F("=ROUND(B13*B95,0)")); [93,94,95,96].forEach(r => { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
 
-  styleBanner(ws, 98, 1, 3, "К Л И Р И К А"); ws.getRange(99,1).setValue("Показатель"); ws.getRange(99,2).setValue("Значение"); styleHeaderRow(ws, 99, 1, 2); ws.getRange(100,1).setValue("От священников"); ws.getRange(100,2).setFormula(F("=B17/100")); ws.getRange(101,1).setValue("От благовоний"); ws.getRange(101,2).setFormula(F("=IF(B9>=1,1,0)+IF(B9>=2,0.75,0)+IF(B9>=3,0.5,0)+IF(B9>=4,0.25,0)")); ws.getRange(102,1).setValue("От храмов и строек"); ws.getRange(102,2).setFormula(F("=B204")); ws.getRange(103,1).setValue("Итого прирост"); ws.getRange(103,2).setFormula(F("=B100+B101+B102+B134")); ws.getRange(104,1).setValue("Потрачено"); ws.getRange(104,2).setValue(0); ws.getRange(105,1).setValue("Клирика начало"); ws.getRange(105,2).setValue(0); ws.getRange(106,1).setValue("Клирика конец"); ws.getRange(106,2).setFormula(F("=B105+B103-B104")); ws.getRange(107,1).setValue("Угроза"); ws.getRange(107,2).setFormula(F('=IF(B106<=-20,"ВТОРЖЕНИЕ",IF(B106<=-10,"РАЗРЫВ",IF(B106<=-5,"ПРЕДУПРЕЖДЕНИЕ","СТАБИЛЬНО")))')); for (let r = 100; r <= 107; r++) { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); }
+  styleBanner(ws, 98, 1, 3, "К Л И Р И К А"); ws.getRange(99,1).setValue("Показатель"); ws.getRange(99,2).setValue("Значение"); styleHeaderRow(ws, 99, 1, 2); ws.getRange(100,1).setValue("От священников"); ws.getRange(100,2).setFormula(F("=B17/100")); ws.getRange(101,1).setValue("От благовоний"); ws.getRange(101,2).setFormula(F("=IF(B9>=1,1,0)+IF(B9>=2,0.75,0)+IF(B9>=3,0.5,0)+IF(B9>=4,0.25,0)")); ws.getRange(102,1).setValue("От храмов и строек"); ws.getRange(102,2).setFormula(F("=B204")); ws.getRange(103,1).setValue("Итого прирост"); ws.getRange(103,2).setFormula(F("=(B100+B101+B102+B134)*B175")); ws.getRange(104,1).setValue("Потрачено"); ws.getRange(104,2).setValue(0); ws.getRange(105,1).setValue("Клирика начало"); ws.getRange(105,2).setValue(0); ws.getRange(106,1).setValue("Клирика конец"); ws.getRange(106,2).setFormula(F("=B105+B103-B104")); ws.getRange(107,1).setValue("Угроза"); ws.getRange(107,2).setFormula(F('=IF(B106<=-20,"ВТОРЖЕНИЕ",IF(B106<=-10,"РАЗРЫВ",IF(B106<=-5,"ПРЕДУПРЕЖДЕНИЕ","СТАБИЛЬНО")))')); for (let r = 100; r <= 107; r++) { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); }
 
-  styleBanner(ws, 110, 1, 3, "С О Д Е Р Ж А Н И Е   А Р М И И"); ws.getRange(111,1).setValue("Показатель"); ws.getRange(111,2).setValue("Значение"); styleHeaderRow(ws, 111, 1, 2); ws.getRange(112,1).setValue("Число бойцов"); ws.getRange(112,2).setFormula(F("=SUM('Армия'!G15:G64)")); ws.getRange(113,1).setValue("База"); ws.getRange(113,2).setFormula(F("=SUM('Армия'!R15:R64)")); ws.getRange(114,1).setValue("Скидка железа"); ws.getRange(114,2).setFormula(F("=MIN(0.2,B5*0.05)")); ws.getRange(115,1).setValue("Скидка строек"); ws.getRange(115,2).setFormula(F("=B206")); ws.getRange(116,1).setValue("Итог"); ws.getRange(116,2).setFormula(F("=MAX(0,B113*(1-B114)*(1-B115)*(1+B129))")); ws.getRange(117,1).setValue("Еда армии (3 на бойца, 5 в походе)"); ws.getRange(117,2).setFormula(F(`=3*B112+2*SUMIF('Армия'!F15:F64,"В походе",'Армия'!G15:G64)`)); for (let r = 112; r <= 117; r++) { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); }
+  styleBanner(ws, 110, 1, 3, "С О Д Е Р Ж А Н И Е   А Р М И И"); ws.getRange(111,1).setValue("Показатель"); ws.getRange(111,2).setValue("Значение"); styleHeaderRow(ws, 111, 1, 2); ws.getRange(112,1).setValue("Число бойцов"); ws.getRange(112,2).setFormula(F("=SUM('Армия'!G15:G64)")); ws.getRange(113,1).setValue("База"); ws.getRange(113,2).setFormula(F("=SUM('Армия'!R15:R64)")); ws.getRange(114,1).setValue("Скидка железа"); ws.getRange(114,2).setFormula(F("=MIN(0.2,B5*0.05)")); ws.getRange(115,1).setValue("Скидка строек"); ws.getRange(115,2).setFormula(F("=B206")); ws.getRange(116,1).setValue("Итог"); ws.getRange(116,2).setFormula(F("=MAX(0,B113*(1-B114)*(1-B115)*(1+B129))*B178")); ws.getRange(117,1).setValue("Еда армии (3 на бойца, 5 в походе)"); ws.getRange(117,2).setFormula(F(`=3*B112+2*SUMIF('Армия'!F15:F64,"В походе",'Армия'!G15:G64)`)); for (let r = 112; r <= 117; r++) { ws.getRange(r,1,1,2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); }
 
   // Бонусы от строек считаются прямо по таблице «Стройки». B: еда/ремесло/торговля — абсолютная прибыль построек своей
   // категории; C201:C203 — процентный бонус от построек других категорий с тем же показателем (Мосты, Дороги, Библиотека…).
@@ -835,6 +835,37 @@ function fillCalcSheet(ss) {
    [157, "Фонд стройки сейчас: монеты", "=INDEX('Журнал'!J:J,MATCH(9^9,'Журнал'!B:B))"], [158, "Ремесло в фонд за ход", "=B26*B155/100"],
    [159, "Монеты в фонд за ход", "=MAX(0,B31-B32)*B155/100"], [160, "Доступно ремесла", "=B156+B158"], [161, "Доступно монет", "=B157+B159"]
   ].forEach(([r, n, v]) => { ws.getRange(r, 1).setValue(n).setFontFamily(FONT_BODY); if (typeof v === "string") ws.getRange(r, 2).setFormula(F(v)); else ws.getRange(r, 2).setValue(v); ws.getRange(r, 1, 1, 2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
+  // Бонусы лояльности сословий (как в EU4): 5 ступеней 0-19/20-39/40-59/60-79/80-100, множители в B171:B179.
+  styleBanner(ws, 163, 1, 4, "Б О Н У С Ы   Л О Я Л Ь Н О С Т И");
+  ["Сословие", "Уровень", "Ступень", "Эффект"].forEach((h, j) => ws.getRange(164, 1 + j).setValue(h)); styleHeaderRow(ws, 164, 1, 4);
+  const LVL = '"Мятеж","Недовольство","Спокойствие","Верность","Преданность"';
+  [["Крестьяне", '"кризис Бунт черни","еда -3.8%, прирост -0.2 п.п.","без эффекта","еда +3.8%, прирост +0.2 п.п.","еда +7.5%, прирост +0.4 п.п., сброд +7.5%"'],
+   ["Ремесленники", '"кризис Стачка ремесленников","ремесло -7.5%","без эффекта","ремесло +5.3%","ремесло +11.3%, содержание армии -3.8%"'],
+   ["Торговцы", '"кризис Бойкот торговцев","доход торговли -5.3%","без эффекта","доход торговли +5.3%","доход торговли +11.3%"'],
+   ["Священники", '"кризис Религиозный раскол","Клирика -7.5%, единство -2.3","без эффекта","Клирика +7.5%, единство +2.3","Клирика +15%, единство +4.5"'],
+   ["Феодалы", '"кризис Бунт феодалов","призыв -7.5%, единство -2.3","без эффекта","призыв +7.5%, содержание армии -3.8%","призыв +15%, содержание армии -7.5%, единство +2.3"']
+  ].forEach(([n, eff], i) => {
+    const r = 165 + i, L = `B${59 + i}`;
+    ws.getRange(r, 1).setValue(n).setFontFamily(FONT_BODY);
+    ws.getRange(r, 2).setFormula(F(`=CHOOSE(C${r}+1,${LVL})`));
+    ws.getRange(r, 3).setFormula(F(`=IF(${L}<20,0,IF(${L}<40,1,IF(${L}<60,2,IF(${L}<80,3,4))))`));
+    // текст эффекта собираем без F(): F() заменил бы запятые внутри строк на «;»
+    const loc = SS_().getSpreadsheetLocale(), en = !loc || loc.toLowerCase().startsWith("en");
+    const txt = en ? eff : eff.replace(/(\d)\.(\d)/g, "$1,$2").replace(/","/g, '";"');
+    ws.getRange(r, 4).setFormula(`=CHOOSE(C${r}+1${en ? "," : ";"}${txt})`);
+    ws.getRange(r, 1, 1, 4).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID);
+  });
+  ws.getRange(170, 1).setValue("Множитель"); ws.getRange(170, 2).setValue("Значение"); styleHeaderRow(ws, 170, 1, 2);
+  [[171, "Еда, множ. (B79)", "=1+CHOOSE(C165+1,0,-0.038,0,0.038,0.075)"],
+   [172, "Прирост, доля (B95)", "=CHOOSE(C165+1,0,-0.002,0,0.002,0.004)"],
+   [173, "Ремесло, множ. (B80)", "=1+CHOOSE(C166+1,0,-0.075,0,0.053,0.113)"],
+   [174, "Торговля, множ. (B81)", "=1+CHOOSE(C167+1,0,-0.053,0,0.053,0.113)"],
+   [175, "Клирика, множ. (B103)", "=1+CHOOSE(C168+1,0,-0.075,0,0.075,0.15)"],
+   [176, "Призыв специалистов, множ. (B42)", "=1+CHOOSE(C169+1,0,-0.075,0,0.075,0.15)"],
+   [177, "Призыв сброда, множ. (B43)", "=B176+CHOOSE(C165+1,0,0,0,0,0.075)"],
+   [178, "Содержание армии, множ. (B116)", "=1-CHOOSE(C166+1,0,0,0,0,0.038)-CHOOSE(C169+1,0,0,0,0.038,0.075)"],
+   [179, "Единство (B39)", "=CHOOSE(C168+1,0,-2.3,0,2.3,4.5)+CHOOSE(C169+1,0,-2.3,0,0,2.3)"]
+  ].forEach(([r, n, f]) => { ws.getRange(r, 1).setValue(n).setFontFamily(FONT_BODY); ws.getRange(r, 2).setFormula(F(f)); ws.getRange(r, 1, 1, 2).setBorder(true,true,true,true,true,true,C.brown,SpreadsheetApp.BorderStyle.SOLID); });
   ws.getRange("B155").setNumberFormat('0"%"');   // бюджет хранится числом 0-100, а не долей: 30 = 30%
 
   [300, 140, 200, 100].forEach((w, i) => ws.setColumnWidth(i + 1, w)); paintParchment(ws, 215, 6, C.parchmentDark);
