@@ -14,6 +14,8 @@ import { handleMcp } from "./mcp.js";
 import { parseVerdict, applyEffects, modEffectText } from "./effects.js";
 
 const CRISIS_NAMES = ["Голод", "Бунт феодалов", "Религиозный раскол", "Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];
+// Кризисы сословий: Расчёты!B120:B122 (лояльность крестьян, ремесленников, торговцев ниже 20)
+const ESTATE_CRISIS_NAMES = ["Бунт черни", "Стачка ремесленников", "Бойкот торговцев"];
 
 class HttpError extends Error {
   constructor(message, extra = {}) { super(message); Object.assign(this, extra); }
@@ -410,7 +412,7 @@ function parseLedger(vr, startYear) {
     fleet: fleetRows.map((r) => ({ name: String(cell(r, 0)).trim(), count: round(num(cell(r, 1))) })).filter((x) => x.name && x.count > 0),
     depot: depotRows.map((r) => ({ kind: String(cell(r, 0)).trim(), name: String(cell(r, 1)).trim(), stock: round(num(cell(r, 3))) })).filter((x) => x.name && x.stock > 0),
     resources: RESOURCE_NAMES.map((name, i) => ({ name, count: num(cell(resRows[i], 0)) })),
-    crises: CRISIS_NAMES.filter((_, i) => s(67 + i) === "ДА"),
+    crises: CRISIS_NAMES.filter((_, i) => s(67 + i) === "ДА").concat(ESTATE_CRISIS_NAMES.filter((_, i) => s(120 + i) === "ДА")),
     regions,
     modifiers: modRows.filter((r) => String(cell(r, 0)).trim() && cell(r, 2) === "АКТИВЕН")
       .map((r) => ({ name: String(cell(r, 0)), effects: String(cell(r, 4)), term: String(cell(r, 3)) })),
