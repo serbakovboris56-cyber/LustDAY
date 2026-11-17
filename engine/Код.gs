@@ -113,7 +113,7 @@ const BUILDINGS = [
   ["Инфраструктура","Архив",500,1800,"","Библиотека","единство","0.05",2],
   ["Инфраструктура","Ратуша",700,2500,"","","единство","0.08",2],
   ["Инфраструктура","Университет",1400,5000,"","Библиотека","ремесло","0.2",2],
-  ["Инфраструктура","Обсерватория",900,3200,"","","клирика","10.5",2],
+  ["Инфраструктура","Обсерватория",2900,10500,"","Библиотека","клирика","10.5",2],
   ["Инфраструктура","Алхим. лаборатория",700,2600,"","","ремесло","0.1",2],
   ["Инфраструктура","Академия",2000,7000,"","Университет","ремесло","0.3",1],
   ["Магия","Дом мага",900,3300,"","","клирика","3.8",10],
@@ -565,8 +565,11 @@ function writeJournalFormulas(ws, row, prev) {
 // ЛИСТ "СТРОЙКИ" — все здания по категориям (строки-разделители), плашки бонусов, панель автостройки
 // ============================================================
 // Колонки: A категория* | B здание | C рем. | D мон. | E требует | F цепочка | G показатель* | H за 1 шт. | I баз. лимит* |
-// J заполнено (полоска) | K построено | L лимит | M эффект | N авто | O приоритет | P свободно* | Q план хода   (* скрыты)
+// J заполнено (полоска) | K построено | L лимит | M эффект | N авто | O приоритет | P свободно* | Q план хода | R баз. рем.* | S баз. мон.*   (* скрыты)
 const BLD_HEAD = 11, BLD_FIRST = 12, BLD_BUDGET = "O4", BLD_MAXTURN = "O8";
+// Каждое следующее здание того же типа дороже на 15% базовой цены: C/D = R/S × (1 + 0,15 × построено),
+// в формуле записано как ROUND(R*(20+3*K)/20), без дробей, чтобы не зависеть от локали. При смене шага поправить и формулу.
+const BLD_PRICE_STEP = 0.15;
 const BLD_CATS = { "Сельское х-во": ["СЕЛЬСКОЕ ХОЗЯЙСТВО", "#6FA35A"], "Ремесло": ["РЕМЕСЛО", "#B8734A"], "Торговля": ["ТОРГОВЛЯ", "#C9A646"],
   "Религия": ["РЕЛИГИЯ", "#9277C9"], "Военные": ["ВОЕННОЕ ДЕЛО", "#C0503F"], "Инфраструктура": ["ИНФРАСТРУКТУРА", "#5B8DB8"], "Магия": ["МАГИЯ", "#4FA3A0"] };
 
@@ -623,6 +626,8 @@ function fillBuildingsSheet(ss) {
   // Шапка таблицы
   const heads = { 2: "ЗДАНИЕ", 3: "РЕМ.", 4: "МОН.", 5: "ТРЕБУЕТ", 6: "ЦЕПОЧКА", 8: "ЗА 1 ШТ.", 10: "ЗАПОЛНЕНО", 11: "ПОСТР.", 12: "ЛИМИТ", 13: "ЭФФЕКТ", 14: "АВТО", 15: "ПРИОР.", 17: "ПЛАН ХОДА" };
   Object.keys(heads).forEach(c => ws.getRange(BLD_HEAD, Number(c)).setValue(heads[c]));
+  ws.getRange(BLD_HEAD, 3).setNote("Цена следующего здания. Каждое построенное здание этого типа поднимает цену на 15% от базовой (база в скрытых колонках R и S).");
+  ws.getRange(BLD_HEAD, 4).setNote("Цена следующего здания. Каждое построенное здание этого типа поднимает цену на 15% от базовой (база в скрытых колонках R и S).");
   styleHeaderRow(ws, BLD_HEAD, 1, 17);
   ws.getRange(BLD_HEAD, 2).setHorizontalAlignment("left");
 
@@ -645,6 +650,9 @@ function fillBuildingsSheet(ss) {
     // Еда, ремесло, торговля дают число единиц за здание; оно задано числом и не зависит от цены.
     const kind = ["Сельское х-во", "Ремесло", "Торговля"].includes(cat) ? "abs" : (ind === "клирика" ? "cler" : "pct");
     ws.getRange(r, 1, 1, 7).setValues([[cat, name, rem, mon, res, chain, ind]]);
+    // Дорожание: R/S (скрыты) — базовая цена, C/D — цена следующего здания, +15% базы за каждое построенное.
+    ws.getRange(r, 18, 1, 2).setValues([[rem, mon]]);
+    ws.getRange(r, 3, 1, 2).setFormulas([[`=ROUND(R${r}*(20+3*$K${r})/20)`, `=ROUND(S${r}*(20+3*$K${r})/20)`]]);
     ws.getRange(r, 8).setValue(Number(prof));
     ws.getRange(r, 9).setValue(lim);
     ws.getRange(r, 10).setFormula(F(`=REPT("█",ROUND(10*MIN(1,K${r}/MAX(1,L${r}))))&REPT("░",10-ROUND(10*MIN(1,K${r}/MAX(1,L${r}))))`));
@@ -1473,7 +1481,10 @@ function autoBuild(bld, firstB, lastB, availRem, availMon, maxPerTurn) {
   const items = [], blocked = [];
   data.forEach((r, i) => {
     if (Number(r[13]) !== 1) return;
-    const it = { row: firstB + i, name: String(r[1]), rem: Number(r[2]) || 0, mon: Number(r[3]) || 0, prio: Number(r[14]) || 100, freeSlots: Number(r[15]) || 0 };
+    const it = { row: firstB + i, name: String(r[1]), rem: Number(r[2]) || 0, mon: Number(r[3]) || 0, prio: Number(r[14]) || 100, freeSlots: Number(r[15]) || 0,
+      built: Number(r[10]) || 0 };
+    // Базовая цена из цены следующего здания: C/D = база × (1 + шаг × построено).
+    it.baseRem = it.rem / (1 + BLD_PRICE_STEP * it.built); it.baseMon = it.mon / (1 + BLD_PRICE_STEP * it.built);
     if (it.freeSlots <= 0) return;
     const chain = String(r[5] || "").trim();
     if (chain && !(builtByName[chain] > 0)) { blocked.push({ name: it.name, row: it.row, reason: "нужно здание «" + chain + "»" }); return; }
@@ -1491,8 +1502,11 @@ function autoBuild(bld, firstB, lastB, availRem, availMon, maxPerTurn) {
   items.forEach(it => {
     let count = 0, costRem = 0, costMon = 0;
     while (capLeft > 0 && count < it.freeSlots) {
-      if (it.mon > 0 && monLeft >= it.mon) { monLeft -= it.mon; costMon += it.mon; }
-      else if (it.rem > 0 && remLeft >= it.rem) { remLeft -= it.rem; costRem += it.rem; }
+      // Цена растёт с каждым зданием, в том числе построенным в этот же ход.
+      const k = 1 + BLD_PRICE_STEP * (it.built + count);
+      const mon = Math.round(it.baseMon * k), rem = Math.round(it.baseRem * k);
+      if (mon > 0 && monLeft >= mon) { monLeft -= mon; costMon += mon; }
+      else if (rem > 0 && remLeft >= rem) { remLeft -= rem; costRem += rem; }
       else break;
       count++; capLeft--;
     }
