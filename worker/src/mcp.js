@@ -14,7 +14,7 @@ const MAX_TEXT = 60000;   // ответы длиннее обрезаются, �
 
 const INSTRUCTIONS = `Сервер военно-политической игры ВПИ («Хроника государств»): государства, их статистика в Google-таблицах, ходы, приказы и метки на карте.
 Порядок работы: vpi_list_states → id государства → vpi_get_state (полная сводка) или vpi_read_inputs (ячейки ввода).
-Правка цифр: сначала vpi_read_inputs, затем vpi_write_inputs только с теми блоками, которые меняются. Каждая правка попадает в журнал (vpi_list_stat_edits) и откатывается vpi_undo_stat_edit.
+Правка цифр: сначала vpi_read_inputs, затем vpi_write_inputs только с теми блоками, которые меняются. Армия, флот и склад снаряжения: vpi_read_army, затем vpi_write_army (сначала preview). Каждая правка попадает в журнал (vpi_list_stat_edits) и откатывается vpi_undo_stat_edit.
 Ход: vpi_turn_board показывает галочки и проблемы; vpi_run_turn запускает «Новый ход» у всех и требует confirm=true.
 Кризисы государства видны только его правителю и админам — не пересказывайте их игрокам других государств.`;
 
@@ -166,6 +166,47 @@ const TOOLS = [
       built_delta: { type: "object", additionalProperties: { type: "integer" }, description: "На сколько изменить «Построено»: {\"Ферма\": 2, \"Храм\": -1}." },
     }, ["state_id", "row", "region_name", "buildings"]),
     run: (a, api) => api.call("adminWriteBuildings", { stateId: a.state_id, row: a.row, name: a.region_name, buildings: a.buildings, built: a.built_delta }),
+  },
+  {
+    name: "vpi_read_army", title: "Армия", annotations: RO,
+    description: "Лист «Армия» государства прямо из таблицы: отряды «Знамён» (строки 15–64: name, type род войск, region, state, count, staff штат, armor, weapon, training, morale дух), флот (строки 86–95: name, count, description) и склад снаряжения (строки 86–105: kind, item, stock, note). ref — допустимые роды войск, броня, обучение, состояния, оружие, виды склада. Мощь и содержание считает сама таблица (vpi_get_state).",
+    inputSchema: obj({ state_id: stateId }, ["state_id"]),
+    run: (a, api) => api.call("adminReadArmy", { stateId: a.state_id }),
+  },
+  {
+    name: "vpi_write_army", title: "Изменить армию", annotations: WRITE,
+    description: "Вносит изменения в лист «Армия»: отряды, флот, склад снаряжения. Присылайте только то, что меняется. Сначала вызовите с preview=true (по умолчанию) и покажите пользователю список changes, потом тот же вызов с preview=false запишет. "
+      + "Отряд ищется по row, иначе по точному названию; не найден — создаётся новый (нужны name, type, count). count — новое число, count_delta — прибавить или убавить; delete=true убирает отряд. "
+      + "Корабль ищется по row или name; нового корабля нет в списке — он ложится в свободную строку «Особое», и его нужно расписать в description (размер, мачты, экипаж, вместимость, реки или океан). "
+      + "Предмет склада ищется по row или item; нового нет — ложится в пустую строку. stock — новое число, stock_delta — прибавить или убавить. Выданное отрядам снаряжение вычитайте со склада сами (stock_delta). "
+      + "Запись попадает в журнал правок (блок «Армия») и откатывается vpi_undo_stat_edit.",
+    inputSchema: obj({
+      state_id: stateId,
+      troops: { type: "array", maxItems: 50, items: obj({
+        row: { type: "integer", minimum: 15, maximum: 64, description: "Строка отряда из vpi_read_army." },
+        match_name: { type: "string", description: "Необязательно: название, которое должно стоять в row (защита от записи в чужую строку)." },
+        name: { type: "string", description: "Название отряда (при row — новое название)." },
+        type: { type: "string", description: "Род войск из ref.types: Пехота, Стрелки, Конница, Осадные, Магия, Особое." },
+        region: { type: "string" }, state: { type: "string", description: "Из ref.states, например «В гарнизоне», «В походе»." },
+        count: { type: "integer", minimum: 0 }, count_delta: { type: "integer" },
+        staff: { type: ["integer", "string"], description: "Штат (полная численность); \"\" — очистить." },
+        armor: { type: "string" }, weapon: { type: "string" }, training: { type: "string" },
+        morale: { type: ["integer", "string"], description: "Дух 0–100; \"\" — очистить (считается как 50)." },
+        delete: { type: "boolean" },
+      }) },
+      fleet: { type: "array", maxItems: 10, items: obj({
+        row: { type: "integer", minimum: 86, maximum: 95 }, name: { type: "string" },
+        count: { type: "integer", minimum: 0 }, count_delta: { type: "integer" },
+        description: { type: "string" }, delete: { type: "boolean" },
+      }) },
+      depot: { type: "array", maxItems: 20, items: obj({
+        row: { type: "integer", minimum: 86, maximum: 105 }, item: { type: "string" }, kind: { type: "string", description: "Броня, Оружие, Кони, Особое." },
+        stock: { type: "integer", minimum: 0 }, stock_delta: { type: "integer" }, note: { type: "string" }, delete: { type: "boolean" },
+      }) },
+      preview: { type: "boolean", default: true, description: "true — только показать изменения, ничего не записывая." },
+    }, ["state_id"]),
+    run: (a, api) => api.call("adminWriteArmy", { stateId: a.state_id, preview: a.preview !== false,
+      patch: { troops: a.troops || [], fleet: a.fleet || [], depot: a.depot || [] } }),
   },
   {
     name: "vpi_list_stat_edits", title: "Журнал правок", annotations: RO,
