@@ -12,6 +12,7 @@ const ESTATES = ["Крестьяне", "Ремесленники", "Торгов
 const RESOURCE_NAMES = ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"];
 import { handleMcp } from "./mcp.js";
 import { parseVerdict, applyEffects, modEffectText } from "./effects.js";
+import { ARMY_RANGES, parseArmy, applyArmyPatch, armyData, diffArmy, UNIT_STATES as UNIT_STATES_LIST, WEAPON_LIST as WEAPON_NAMES, DEPOT_KINDS as DEPOT_KIND_NAMES } from "./army.js";
 
 const CRISIS_NAMES = ["Голод", "Бунт феодалов", "Религиозный раскол", "Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];
 // Кризисы сословий: Расчёты!B120:B122 (лояльность крестьян, ремесленников, торговцев ниже 20)
@@ -127,6 +128,8 @@ async function handlePost(body, env, ctx, request) {
     case "adminTurnUndo": await requireAdmin(env, body.token); return adminTurnUndo(env, ctx, body.stateIds);
     case "adminReadBuildings": await requireAdmin(env, body.token); return adminReadBuildings(env, body.stateId);
     case "adminWriteBuildings": await requireAdmin(env, body.token); return adminWriteBuildings(env, body.stateId, body);
+    case "adminReadArmy": await requireAdmin(env, body.token); return adminReadArmy(env, body.stateId);
+    case "adminWriteArmy": await requireAdmin(env, body.token); return adminWriteArmy(env, ctx, body.stateId, body.patch, !!body.preview);
     case "adminSaveMarks": await requireAdmin(env, body.token); return adminSaveMarks(env, body.marks);
     case "adminSetStyle": await requireAdmin(env, body.token); return adminSetStyle(env, body.stateId, body.style);
     default: throw new HttpError("Неизвестное действие");
@@ -844,9 +847,9 @@ const MOD_RANGE = "'Модификаторы'!A5:Z104", MOD_FIRST_ROW = 5, MOD_R
 const MOD_NUM_COLS = { food: 10, craft: 11, income: 12, army: 13, levy: 14, growth: 15, unity: 16, unityPerTurn: 17, cleric: 23, treasury: 24, store: 25 };
 const BLD_FIRST_ROW = 12;
 // Блоки ввода «Цифр»: так же называются ключи inputs. Журнал правок хранит и откатывает их целиком.
-const INPUT_KEYS = ["name", "regions", "resources", "crises", "loyaltyDelta", "costs", "stocks", "budgetPct", "unity", "modifiers", "construction"];
+const INPUT_KEYS = ["name", "regions", "resources", "crises", "loyaltyDelta", "costs", "stocks", "budgetPct", "unity", "modifiers", "construction", "army"];
 const INPUT_LABELS = { name: "Название", regions: "Регионы", resources: "Ресурсы", crises: "Кризисы", loyaltyDelta: "Поправки лояльности", costs: "Расходы хода", stocks: "Стартовые запасы", budgetPct: "Бюджет стройки",
-  unity: "Единство", modifiers: "Модификаторы", construction: "Стройки" };
+  unity: "Единство", modifiers: "Модификаторы", construction: "Стройки", army: "Армия" };
 // Стартовые запасы — строка хода 0 Журнала (дальше остатки переносятся формулами) и «Клирика начало».
 // Колонки строки 4: I/J — фонд стройки (ремесло/монеты), O — склад, R — казна.
 const STOCK_CELLS = { fundCraft: 8, fundCoins: 9, warehouse: 14, treasury: 17 };
@@ -859,10 +862,14 @@ async function adminReadInputs(env, stateId) {
 
 async function readInputs(env, r) {
   const qs = INPUT_RANGES.map((x) => "ranges=" + encodeURIComponent(x)).join("&");
-  const [data, modData] = await Promise.all([
+  const aqs = ARMY_RANGES.map((x) => "ranges=" + encodeURIComponent(x)).join("&");
+  const [data, modData, armyRaw] = await Promise.all([
     sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${qs}&valueRenderOption=UNFORMATTED_VALUE`),
     sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values/${encodeURIComponent(MOD_RANGE)}?valueRenderOption=UNFORMATTED_VALUE`).catch(() => null),
+    // «Армия» тоже отдельно: если листа нет, остальные цифры читаются
+    sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchGet?${aqs}&valueRenderOption=UNFORMATTED_VALUE`).catch(() => null),
   ]);
+  const army = armyRaw ? parseArmy(armyRaw.valueRanges.map((x) => x.values || [])) : null;
   const v = data.valueRanges.map((x) => x.values || []);
   const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
   const cell = (rows, i, j = 0) => (rows[i] && rows[i][j] !== undefined ? rows[i][j] : "");
@@ -888,10 +895,12 @@ async function readInputs(env, r) {
       unity: num(cell(v[11], 0)),
       modifiers: modData ? readModifierRows(modData.values || []) : null,
       construction: readConstruction(v[12], num(cell(v[13], 0))),
+      army: army && army.army,
       // только для показа: что в таблице сейчас (последняя строка Журнала и Расчёты)
       view: { treasury: num(cell(v[14], 0)), warehouse: num(cell(v[14], 1)), fundCraft: num(cell(v[15], 0)), fundCoins: num(cell(v[15], 1)), unity: num(cell(v[16], 0)),
         clerics: num(cell(v[9], 0)), turn: num(cell(v[10], 0)) },
     },
+    armyRef: army && army.ref,
   };
 }
 
@@ -974,6 +983,9 @@ function inputsData(inp) {
       { range: "'Расчёты'!B105", values: [[n(k.clerics)]] });
   }
   if (inp.budgetPct !== undefined) data.push({ range: "'Стройки'!O4", values: [[Math.round(n(inp.budgetPct, 0, 100))]] });
+  if (inp.army && typeof inp.army === "object") {
+    try { data.push(...armyData(inp.army)); } catch (e) { throw new HttpError(e.message); }
+  }
   if (inp.unity !== undefined) data.push({ range: "'Расчёты'!B133", values: [[Math.round(n(inp.unity, -1000, 1000) * 100) / 100]] });
   if (Array.isArray(inp.regions)) {
     if (inp.regions.length > 18) throw new HttpError("Регионов не больше 18.");
@@ -1140,7 +1152,8 @@ function diffInputs(b, a, keys) {
       const xs = x || [], ys = y || [];
       for (const m of ys) { const o = xs.find((q) => key(q) === key(m)); if (!o) out.push(`Модификатор «${m.name}» добавлен`); else if (!sameBlock(o, m)) out.push(`Модификатор «${m.name}» изменён`); }
       for (const m of xs) if (!ys.some((q) => key(q) === key(m))) out.push(`Модификатор «${m.name}» убран`);
-    } else if (k === "construction") {
+    } else if (k === "army") out.push(...diffArmy(x, y));
+    else if (k === "construction") {
       if (x && y && x.maxPerTurn !== y.maxPerTurn) pair("Построек за ход", x.maxPerTurn, y.maxPerTurn);
       for (const it of (y && y.items) || []) {
         const o = x && x.items.find((q) => q.name === it.name);
@@ -2027,4 +2040,32 @@ async function adminWriteBuildings(env, stateId, body) {
   const fresh = await readBuildings(env, r).catch(() => null);
   return { ok: true, public: s && s.public, regions: fresh && fresh.regions, built: fresh && fresh.built,
     warning: notFound.length ? `На листе «Стройки» нет: ${notFound.join(", ")} — «Построено» для них не изменено.` : undefined };
+}
+
+/* ============================================================
+ * ЛИСТ «АРМИЯ»: войска, флот, склад снаряжения (для MCP и сайта)
+ * Правка идёт через adminWriteInputs блоком army, поэтому журнал правок и откат работают как у остальных цифр.
+ * ============================================================ */
+async function adminReadArmy(env, stateId) {
+  const r = await stateRow(env, stateId);
+  const { inputs, armyRef } = await readInputs(env, r);
+  if (!inputs.army) return { ok: false, error: "Не удалось прочитать лист «Армия»." };
+  return { ok: true, army: inputs.army, ref: { ...armyRef, states: UNIT_STATES_LIST, weapons: WEAPON_NAMES, depotKinds: DEPOT_KIND_NAMES }, regions: inputs.regions.map((g) => g.name) };
+}
+
+// patch — список изменений (см. applyArmyPatch в army.js); preview — только показать, что поменяется
+async function adminWriteArmy(env, ctx, stateId, patch, preview) {
+  if (!patch || typeof patch !== "object") return { ok: false, error: "Нет изменений." };
+  const r = await stateRow(env, stateId);
+  const { inputs, armyRef } = await readInputs(env, r);
+  if (!inputs.army) return { ok: false, error: "Не удалось прочитать лист «Армия»." };
+  const { army, errors, warnings } = applyArmyPatch(inputs.army, patch, armyRef, inputs.regions.map((g) => g.name));
+  if (errors.length) return { ok: false, error: errors.join(" "), errors, warnings };
+  const changes = diffArmy(inputs.army, army);
+  if (!changes.length) return { ok: false, error: "Эти изменения ничего не меняют в армии.", warnings };
+  if (preview) return { ok: true, preview: true, changes, warnings };
+  const w = await adminWriteInputs(env, ctx, stateId, { army });
+  if (!w.ok) return w;
+  const fresh = await readInputs(env, r).catch(() => null);
+  return { ok: true, changes, warnings, army: fresh && fresh.inputs.army, ledger: w.ledger && { levy: w.ledger.levy, armyPower: w.ledger.armyPower, fleet: w.ledger.fleet, depot: w.ledger.depot, coins: w.ledger.coins }, error: w.error };
 }
