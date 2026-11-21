@@ -11,7 +11,7 @@ const COLORS = ["#C8463A", "#3D7FCF", "#3E9E62", "#C9A646", "#9277C9", "#4FA3A0"
 const ESTATES = ["Крестьяне", "Ремесленники", "Торговцы", "Священники", "Феодалы"];
 const RESOURCE_NAMES = ["Золото", "Железо", "Драг. камни", "Уголь", "Соль", "Благовония", "Шёлк"];
 import { handleMcp } from "./mcp.js";
-import { parseVerdict, applyEffects, modEffectText } from "./effects.js";
+import { parseVerdict, applyEffects, modEffectText, syncRegionBuildings } from "./effects.js";
 import { ARMY_RANGES, parseArmy, applyArmyPatch, armyData, diffArmy, UNIT_STATES as UNIT_STATES_LIST, WEAPON_LIST as WEAPON_NAMES, DEPOT_KINDS as DEPOT_KIND_NAMES } from "./army.js";
 
 const CRISIS_NAMES = ["Голод", "Бунт феодалов", "Религиозный раскол", "Поветрие", "Набеги", "Опустошение земель", "Нападение диких зверей"];
@@ -935,9 +935,11 @@ function readConstruction(rows, maxPerTurn) {
 async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   const r = await stateRow(env, stateId);
   if (!inp || typeof inp !== "object") return { ok: false, error: "Нет данных." };
-  const data = inputsData(inp);
   // старые значения — для журнала правок и отката; без них запись всё равно идёт (кроме модификаторов и строек: их пишем по разнице)
   const before = await readInputs(env, r).catch(() => null);
+  const extra = before && inp.construction && typeof inp.construction === "object" ? syncBuiltToRegions(inp, before.inputs) : [];
+  const data = inputsData(inp);
+  data.push(...extra);
   if (inp.modifiers !== undefined || inp.construction !== undefined) {
     if (!before) throw new HttpError("Не удалось прочитать таблицу перед записью модификаторов и строек.");
     if (Array.isArray(inp.modifiers)) data.push(...(await modifiersData(env, r, inp.modifiers, before.inputs.modifiers)));
@@ -947,7 +949,7 @@ async function adminWriteInputs(env, ctx, stateId, inp, undoOf = 0) {
   await keepCrisisFormulas(env, r, data);
   await sheetsFetch(env, `/v4/spreadsheets/${r.sheet_id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
   const after = await readInputs(env, r).catch(() => null);
-  if (before && after) await logStatEdit(env, r.id, INPUT_KEYS.filter((k) => inp[k] !== undefined), before, after, undoOf).catch((e) => console.error(e));
+  if (before && after) await logStatEdit(env, r.id, INPUT_KEYS.filter((k) => inp[k] !== undefined || (k === "regions" && extra.length)), before, after, undoOf).catch((e) => console.error(e));
   // пересобираем цифры этого государства, чтобы сайт сразу показал новое
   const snap = await refreshOneState(env, r.id);
   const s = snap.states.find((x) => x.id === r.id);
@@ -1068,6 +1070,29 @@ function modCells(m) {
   [0, 1, 2, 3, 4].forEach((i) => { c[18 + i] = n(m.loy && m.loy[i], -100, 100); });
   c[4] = modEffectText(m);
   return c;
+}
+
+// «Построено» меняется → то же число зданий вписываем в постройки регионов (колонка R), чтобы их увидела карта.
+// Если в сохранении есть regions, правим их текст до записи; иначе дописываем ячейки R отдельно.
+function syncBuiltToRegions(inp, cur) {
+  if (!cur.construction || !Array.isArray(inp.construction.items)) return [];
+  const byName = new Map(cur.construction.items.map((x) => [x.name, x]));
+  const changes = [];
+  for (const it of inp.construction.items) {
+    const was = it && byName.get(String(it.name));
+    if (!was || it.built === undefined) continue;
+    const d = Math.max(0, Math.round(Number(it.built) || 0)) - was.built;
+    if (d) changes.push({ name: was.name, d });
+  }
+  if (!changes.length) return [];
+  if (Array.isArray(inp.regions)) {
+    inp.regions = inp.regions.map((g) => (g && typeof g === "object" ? { ...g } : g));
+    syncRegionBuildings(inp.regions, cur.regions, changes);
+    return [];
+  }
+  const regs = cur.regions.map((g) => ({ ...g }));
+  const touched = syncRegionBuildings(regs, cur.regions, changes);
+  return [...touched].map((i) => ({ range: `'Регионы'!R${regs[i].row}`, values: [[String(regs[i].buildings || "").slice(0, 500)]] }));
 }
 
 // Стройки: «Построено», «Авто», «Приоритет» по названию здания и лимит построек за ход. Пишем только то, что изменилось.
