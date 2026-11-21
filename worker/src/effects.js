@@ -239,6 +239,65 @@ function parseBuildText(text) {
 }
 const buildText = (items) => items.filter((x) => x.n > 0).map((x) => (x.n > 1 ? `${x.name} x${x.n}` : x.name)).join(", ");
 
+// Сколько штук здания name записано в тексте построек региона (колонка R «Регионы»).
+// Понимает те же записи, что и карта: «Ферма x3», «Ферма 3», «Ферма (3)», «3 Ферма».
+function parseBuildLoose(text) {
+  return String(text || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean).map((s) => {
+    let m = /^(\d+)\s*[x×х*]?\s+(.+)$/i.exec(s);
+    if (m) return { name: m[2].trim(), n: Number(m[1]) };
+    m = /^(.+?)\s*(?:[x×х*]\s*|\(\s*|\s)(\d+)\s*\)?\s*(?:шт\.?)?$/i.exec(s);
+    if (m) return { name: m[1].trim(), n: Number(m[2]) };
+    return { name: s, n: 1 };
+  });
+}
+const countIn = (text, name) => parseBuildLoose(text).filter((x) => low(x.name) === low(name)).reduce((a, x) => a + x.n, 0);
+function addToText(text, name, d) {
+  const items = [];
+  for (const it of parseBuildLoose(text)) {
+    const have = items.find((x) => low(x.name) === low(it.name));
+    if (have) have.n += it.n; else items.push({ ...it });
+  }
+  const it = items.find((x) => low(x.name) === low(name));
+  if (it) it.n = Math.max(0, it.n + d); else if (d > 0) items.push({ name, n: d });
+  return buildText(items);
+}
+
+/**
+ * «Построено» на листе «Стройки» поменяли (сайт «Править цифры», MCP): та же разница должна попасть
+ * в текст построек регионов, иначе карта (она рисует постройки по колонке R «Регионы») их не покажет.
+ * regions — [{name, type, buildings}] уже с правками этого сохранения (меняются на месте);
+ * oldRegions — как было в таблице; changes — [{name, d}] на сколько изменилось «Построено».
+ * Если админ в этом же сохранении сам вписал здание в регион, повторно не добавляем.
+ * Новые здания идут в столицу (или первый регион), снос убирает с последних регионов.
+ * Возвращает номера регионов (индексы в regions), чей текст изменился.
+ */
+export function syncRegionBuildings(regions, oldRegions, changes) {
+  const touched = new Set();
+  const live = regions.map((g, i) => ({ g, i })).filter((x) => x.g && String(x.g.name || "").trim());
+  if (!live.length) return touched;
+  for (const { name, d } of changes) {
+    if (!d) continue;
+    const already = live.reduce((a, x) => a + countIn(x.g.buildings, name), 0) - (oldRegions || []).reduce((a, g) => a + countIn(g && g.buildings, name), 0);
+    let rest = d - already;
+    if (d > 0 && rest > 0) {
+      const cap = live.find((x) => /столиц/i.test(x.g.type || "")) || live[0];
+      cap.g.buildings = addToText(cap.g.buildings, name, rest);
+      touched.add(cap.i);
+    } else if (d < 0 && rest < 0) {
+      for (const x of [...live].reverse()) {
+        if (rest >= 0) break;
+        const have = countIn(x.g.buildings, name);
+        if (!have) continue;
+        const take = Math.min(have, -rest);
+        x.g.buildings = addToText(x.g.buildings, name, -take);
+        rest += take;
+        touched.add(x.i);
+      }
+    }
+  }
+  return touched;
+}
+
 /**
  * inputs — ответ readInputs (с modifiers, construction, unity, view). Возвращает
  * { inputs: только изменённые блоки, summary: [строки «что будет»], warnings: [] }.
